@@ -1,0 +1,63 @@
+{
+  "github_token": {
+    "type": "string",
+    "description": "可选的 GitHub Personal Access Token，用于提高 API 限额",
+    "default": "",
+    "secret": true
+  },
+  "window_hours": {
+    "type": "int",
+    "description": "检查最近多少小时的公开活动",
+    "default": 24
+  },
+  "cache_ttl_seconds": {
+    "type": "int",
+    "description": "活动 API 缓存时间（秒）",
+    "default": 300
+  },
+  "request_cooldown_seconds": {
+    "type": "int",
+    "description": "同一账户请求冷却时间（秒）",
+    "default": 15
+  },
+  "request_timeout_seconds": {
+    "type": "float",
+    "description": "GitHub API 请求超时（秒）",
+    "default": 10
+  },
+  "max_retries": {
+    "type": "int",
+    "description": "网络错误和服务端错误的最大重试次数",
+    "default": 2
+  },
+  "code_event_types": {
+    "type": "list",
+    "description": "判定为写代码的 GitHub 事件类型",
+    "default": ["PushEvent", "PullRequestEvent", "PullRequestReviewEvent"]
+  },
+  "auto_check_enabled": {
+    "type": "bool",
+    "description": "是否启用定时自动检查",
+    "default": false
+  },
+  "auto_check_interval_seconds": {
+    "type": "int",
+    "description": "自动检查间隔（秒）",
+    "default": 3600
+  },
+  "announce_only_on_change": {
+    "type": "bool",
+    "description": "仅在状态变化时播报",
+    "default": true
+  },
+  "min_announce_interval_seconds": {
+    "type": "int",
+    "description": "自动播报最短间隔（秒）",
+    "default": 3600
+  },
+  "admin_only": {
+    "type": "bool",
+    "description": "是否限制管理命令为管理员使用",
+    "default": true
+  }
+}
