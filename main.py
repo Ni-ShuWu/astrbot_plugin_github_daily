@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
+from pathlib import Path
 from typing import Any
+
+# AstrBot 4.27.x loads main.py directly without adding the plugin directory
+# to sys.path, so make sibling packages importable before importing them.
+_PLUGIN_ROOT = Path(__file__).resolve().parent
+if str(_PLUGIN_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PLUGIN_ROOT))
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
@@ -20,7 +28,8 @@ class GithubDailyPlugin(Star):
 
     def __init__(self, context: Context, config: dict[str, Any] | None = None) -> None:
         super().__init__(context)
-        self._config = PluginConfig.from_mapping(config or {})
+        raw_config = dict(config or {})
+        self._config = PluginConfig.from_mapping(raw_config)
         self._service = ContributionService(self._config, self._load_data, self._save_data)
         self._task: asyncio.Task[None] | None = None
         if self._config.auto_check_enabled:
