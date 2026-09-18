@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.1 - 2026-09-18
+
+- 修复插件更新后仍复用旧内部模块、导致 `'PluginConfig' object has no attribute 'is_group_allowed'` 的问题。
+- 内部模块改为相对导入，使 AstrBot 重载时能正确清理并加载新代码。
+- 内部模块版本不一致时在加载阶段给出明确提示，替代难以定位的运行时属性错误。
+
 ## 1.1.0 - 2026-09-18
 
 - 新增 `allowed_group_ids` 群聊白名单配置。

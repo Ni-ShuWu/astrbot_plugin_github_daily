@@ -29,6 +29,16 @@ pip install -r requirements.txt
 
 默认将 `PushEvent`、`PullRequestEvent` 和 `PullRequestReviewEvent` 判定为代码相关活动。其他公开事件可能会被记录为普通活动，但不会直接判定为正在写代码。GitHub Events API 只反映近期公开活动，不能代表完整贡献图；私有仓库活动也可能无法获取。
 
+## 更新插件后
+
+更新到新版本后请在 AstrBot 中重新加载或重启插件。插件内部模块使用相对导入，重载时会加载新代码；如果日志出现：
+
+```text
+'PluginConfig' object has no attribute ...
+```
+
+说明磁盘上的内部模块版本与 `main.py` 不一致，请删除插件目录后重新安装，再重启 AstrBot。
+
 ## 开发检查
 
 ```bash

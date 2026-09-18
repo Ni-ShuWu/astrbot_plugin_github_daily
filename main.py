@@ -8,19 +8,46 @@ import sys
 from pathlib import Path
 from typing import Any
 
-# AstrBot 4.27.x loads main.py directly without adding the plugin directory
-# to sys.path, so make sibling packages importable before importing them.
-_PLUGIN_ROOT = Path(__file__).resolve().parent
-if str(_PLUGIN_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PLUGIN_ROOT))
-
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 
-from github_daily.config import PluginConfig
-from github_daily.errors import GitHubApiError, GitHubDailyError
-from github_daily.service import ContributionService
+
+def _import_bundled_modules() -> tuple[type, type, type]:
+    """Import bundled modules in a way that survives AstrBot plugin reloads.
+
+    AstrBot purges plugin modules from ``sys.modules`` on reload, but only for
+    names under its ``data.plugins.<plugin>`` prefix. Importing the bundle as a
+    relative subpackage keeps it inside that namespace, so reloads pick up new
+    code instead of reusing classes cached by an earlier plugin version.
+    """
+    if __package__:
+        try:
+            from .github_daily.config import PluginConfig
+            from .github_daily.errors import GitHubDailyError
+            from .github_daily.service import ContributionService
+
+            return PluginConfig, GitHubDailyError, ContributionService
+        except ImportError:
+            pass  # Parent package is unavailable; fall through to path import.
+
+    plugin_root = Path(__file__).resolve().parent
+    if str(plugin_root) not in sys.path:
+        sys.path.insert(0, str(plugin_root))
+    for module_name in [
+        name for name in list(sys.modules)
+        if name == "github_daily" or name.startswith("github_daily.")
+    ]:
+        del sys.modules[module_name]
+
+    from github_daily.config import PluginConfig
+    from github_daily.errors import GitHubDailyError
+    from github_daily.service import ContributionService
+
+    return PluginConfig, GitHubDailyError, ContributionService
+
+
+PluginConfig, GitHubDailyError, ContributionService = _import_bundled_modules()
 
 
 class GithubDailyPlugin(Star):
@@ -30,6 +57,10 @@ class GithubDailyPlugin(Star):
         super().__init__(context)
         raw_config = dict(config or {})
         self._config = PluginConfig.from_mapping(raw_config)
+        if not hasattr(self._config, "is_group_allowed"):
+            raise RuntimeError(
+                "github_daily 内部模块版本不一致，请删除插件目录后重新安装并重启 AstrBot。",
+            )
         self._service = ContributionService(self._config, self._load_data, self._save_data)
         self._task: asyncio.Task[None] | None = None
         if self._config.auto_check_enabled:
