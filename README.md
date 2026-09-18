@@ -11,6 +11,7 @@
 - `/github_watch help` 查看帮助
 - 可选定时自动检查
 - 内置 TTL 缓存、请求冷却、失败重试和 GitHub Token 配置
+- 支持群聊白名单，仅白名单群可使用命令或接收自动检查
 
 ## 安装
 
@@ -21,6 +22,8 @@ pip install -r requirements.txt
 ```
 
 在 AstrBot 插件配置中设置 `github_token`（可选）。建议使用只读的 GitHub Personal Access Token，以提高 API 限额。Token 不要提交到 Git。
+
+在 `allowed_group_ids` 中填写允许使用插件的群聊 ID，例如 `['123456789', '987654321']`。留空时不会在任何群聊中响应命令，也不会执行自动推送；私聊始终不受白名单允许。
 
 ## 判定规则
 

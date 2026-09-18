@@ -1,6 +1,6 @@
 name: astrbot_plugin_github_daily
 desc: 检测指定 GitHub 账户近期公开贡献，帮助群聊判断是在写代码还是摸鱼。
-version: 1.0.0
+version: 1.1.0
 author: Ni-ShuWu
 repo: https://github.com/Ni-ShuWu/astrbot_plugin_github_daily
 display_name: GitHub Daily 代码监督

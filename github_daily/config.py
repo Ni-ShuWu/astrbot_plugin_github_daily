@@ -29,6 +29,12 @@ class PluginConfig:
     min_announce_interval_seconds: int = 3600
     github_token: str = ""
     admin_only: bool = True
+    allowed_group_ids: tuple[str, ...] = ()
+
+    def is_group_allowed(self, group_id: str | None) -> bool:
+        """Return whether a group is included in the configured whitelist."""
+        normalized = str(group_id or "").strip()
+        return bool(normalized) and normalized in self.allowed_group_ids
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any] | None) -> "PluginConfig":
@@ -40,6 +46,10 @@ class PluginConfig:
         events = tuple(dict.fromkeys(str(item).strip() for item in configured_events if str(item).strip()))
         if not events:
             events = DEFAULT_CODE_EVENT_TYPES
+        configured_groups = values.get("allowed_group_ids", ())
+        if isinstance(configured_groups, str):
+            configured_groups = configured_groups.replace("，", ",").split(",")
+        group_ids = tuple(dict.fromkeys(str(item).strip() for item in configured_groups if str(item).strip()))
         return cls(
             window_hours=max(1, int(values.get("window_hours", 24))),
             cache_ttl_seconds=max(0, int(values.get("cache_ttl_seconds", 300))),
@@ -53,6 +63,7 @@ class PluginConfig:
             min_announce_interval_seconds=max(0, int(values.get("min_announce_interval_seconds", 3600))),
             github_token=str(values.get("github_token", "") or "").strip(),
             admin_only=bool(values.get("admin_only", True)),
+            allowed_group_ids=group_ids,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -70,4 +81,5 @@ class PluginConfig:
             "min_announce_interval_seconds": self.min_announce_interval_seconds,
             "github_token": self.github_token,
             "admin_only": self.admin_only,
+            "allowed_group_ids": list(self.allowed_group_ids),
         }

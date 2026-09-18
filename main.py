@@ -38,10 +38,14 @@ class GithubDailyPlugin(Star):
     @filter.command("github_watch")
     async def github_watch(self, event: AstrMessageEvent, action: str = "help", username: str = "", display_name: str = ""):
         """管理 GitHub 监督：add/remove/list/check/status/help。"""
+        group_id = str(event.get_group_id() or "").strip()
+        if not self._config.is_group_allowed(group_id):
+            yield event.plain_result("当前群聊不在 GitHub 监督白名单内。")
+            return
         if self._config.admin_only and not event.is_admin():
             yield event.plain_result("只有管理员可以管理 GitHub 监督。")
             return
-        scope = str(event.get_group_id() or event.get_session_id())
+        scope = group_id
         action = action.lower().strip()
         try:
             if action == "add":
@@ -93,7 +97,11 @@ class GithubDailyPlugin(Star):
             try:
                 await asyncio.sleep(self._config.auto_check_interval_seconds)
                 data = await self._load_data()
-                for scope in [key for key in data if not key.startswith("_")]:
+                scopes = [
+                    key for key in data
+                    if not key.startswith("_") and self._config.is_group_allowed(key)
+                ]
+                for scope in scopes:
                     try:
                         await self._service.check_all(scope)
                     except Exception:
