@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from astrbot.api import logger
-from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star
 
 
@@ -79,6 +79,7 @@ class GithubDailyPlugin(Star):
         scope = group_id
         action = action.lower().strip()
         try:
+            await self._service.remember_scope(scope, event.unified_msg_origin, group_id)
             if action == "add":
                 if not username:
                     yield event.plain_result("用法：/github_watch add <GitHub用户名> [昵称]")
@@ -123,24 +124,35 @@ class GithubDailyPlugin(Star):
                 pass
 
     async def _monitor_loop(self) -> None:
-        """Periodically check scopes and announce only meaningful changes."""
+        """Periodically check whitelisted scopes and announce meaningful changes."""
         while True:
             try:
                 await asyncio.sleep(self._config.auto_check_interval_seconds)
-                data = await self._load_data()
-                scopes = [
-                    key for key in data
-                    if not key.startswith("_") and self._config.is_group_allowed(key)
-                ]
-                for scope in scopes:
-                    try:
-                        await self._service.check_all(scope)
-                    except Exception:
-                        logger.exception("automatic GitHub check failed for scope %s", scope)
+                await self._run_auto_check()
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("github_daily monitor loop failed")
+
+    async def _run_auto_check(self) -> None:
+        """Check every eligible scope once and push the results that matter."""
+        targets = await self._service.auto_check_targets(self._config.is_group_allowed)
+        for scope, umo in targets:
+            results, failures = await self._service.check_all(scope)
+            for failure in failures:
+                logger.warning("automatic GitHub check failed for %s: %s", scope, failure)
+            for result in results:
+                try:
+                    if not await self._service.should_announce(scope, result):
+                        continue
+                    chain = MessageChain().message(self._service.format_result(result))
+                    await self.context.send_message(umo, chain)
+                except Exception:
+                    logger.exception(
+                        "failed to announce GitHub status for %s in scope %s",
+                        result.account.username,
+                        scope,
+                    )
 
     async def _load_data(self) -> dict[str, list[dict]]:
         """Load plugin data from AstrBot's asynchronous KV store."""

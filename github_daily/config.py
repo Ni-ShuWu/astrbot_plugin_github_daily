@@ -12,6 +12,63 @@ DEFAULT_CODE_EVENT_TYPES = (
 )
 OPTIONAL_CODE_EVENT_TYPES = ("CreateEvent", "ReleaseEvent")
 
+_TRUE_LITERALS = {"1", "true", "yes", "y", "on", "是", "开启", "启用"}
+_FALSE_LITERALS = {"0", "false", "no", "n", "off", "否", "关闭", "禁用"}
+
+
+def _as_bool(value: Any, default: bool) -> bool:
+    """Parse a boolean without treating the string ``"false"`` as true."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in _TRUE_LITERALS:
+            return True
+        if normalized in _FALSE_LITERALS:
+            return False
+    return default
+
+
+def _as_int(value: Any, default: int, *, minimum: int | None = None) -> int:
+    """Parse an integer, falling back to the default for invalid input."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    if minimum is not None:
+        parsed = max(minimum, parsed)
+    return parsed
+
+
+def _as_float(value: Any, default: float, *, minimum: float | None = None) -> float:
+    """Parse a float, falling back to the default for invalid input."""
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = default
+    if minimum is not None:
+        parsed = max(minimum, parsed)
+    return parsed
+
+
+def _as_string_tuple(value: Any, default: tuple[str, ...] = ()) -> tuple[str, ...]:
+    """Normalize a comma/Chinese-comma separated string or list into a tuple."""
+    if isinstance(value, str):
+        items = value.replace("，", ",").replace("、", ",").split(",")
+    elif isinstance(value, (list, tuple, set)):
+        items = list(value)
+    else:
+        items = []
+    cleaned = (str(item).strip() for item in items)
+    return tuple(dict.fromkeys(item for item in cleaned if item))
+
+
+def _as_masked_token(value: Any) -> str:
+    """Read the token value, treating non-string input as unset."""
+    return value.strip() if isinstance(value, str) else ""
+
 
 @dataclass(slots=True, frozen=True)
 class PluginConfig:
@@ -27,7 +84,7 @@ class PluginConfig:
     auto_check_interval_seconds: int = 3600
     announce_only_on_change: bool = True
     min_announce_interval_seconds: int = 3600
-    github_token: str = ""
+    github_token: str = field(default="", repr=False)
     admin_only: bool = True
     allowed_group_ids: tuple[str, ...] = ()
 
@@ -40,34 +97,25 @@ class PluginConfig:
     def from_mapping(cls, data: dict[str, Any] | None) -> "PluginConfig":
         """Create a validated configuration from AstrBot config data."""
         values = data or {}
-        configured_events = values.get("code_event_types", DEFAULT_CODE_EVENT_TYPES)
-        if isinstance(configured_events, str):
-            configured_events = [item.strip() for item in configured_events.split(",")]
-        events = tuple(dict.fromkeys(str(item).strip() for item in configured_events if str(item).strip()))
-        if not events:
-            events = DEFAULT_CODE_EVENT_TYPES
-        configured_groups = values.get("allowed_group_ids", ())
-        if isinstance(configured_groups, str):
-            configured_groups = configured_groups.replace("，", ",").split(",")
-        group_ids = tuple(dict.fromkeys(str(item).strip() for item in configured_groups if str(item).strip()))
+        events = _as_string_tuple(values.get("code_event_types")) or DEFAULT_CODE_EVENT_TYPES
         return cls(
-            window_hours=max(1, int(values.get("window_hours", 24))),
-            cache_ttl_seconds=max(0, int(values.get("cache_ttl_seconds", 300))),
-            request_cooldown_seconds=max(0, int(values.get("request_cooldown_seconds", 15))),
-            request_timeout_seconds=max(1.0, float(values.get("request_timeout_seconds", 10.0))),
-            max_retries=max(0, int(values.get("max_retries", 2))),
+            window_hours=_as_int(values.get("window_hours"), 24, minimum=1),
+            cache_ttl_seconds=_as_int(values.get("cache_ttl_seconds"), 300, minimum=0),
+            request_cooldown_seconds=_as_int(values.get("request_cooldown_seconds"), 15, minimum=0),
+            request_timeout_seconds=_as_float(values.get("request_timeout_seconds"), 10.0, minimum=1.0),
+            max_retries=_as_int(values.get("max_retries"), 2, minimum=0),
             code_event_types=events,
-            auto_check_enabled=bool(values.get("auto_check_enabled", False)),
-            auto_check_interval_seconds=max(60, int(values.get("auto_check_interval_seconds", 3600))),
-            announce_only_on_change=bool(values.get("announce_only_on_change", True)),
-            min_announce_interval_seconds=max(0, int(values.get("min_announce_interval_seconds", 3600))),
-            github_token=str(values.get("github_token", "") or "").strip(),
-            admin_only=bool(values.get("admin_only", True)),
-            allowed_group_ids=group_ids,
+            auto_check_enabled=_as_bool(values.get("auto_check_enabled"), False),
+            auto_check_interval_seconds=_as_int(values.get("auto_check_interval_seconds"), 3600, minimum=60),
+            announce_only_on_change=_as_bool(values.get("announce_only_on_change"), True),
+            min_announce_interval_seconds=_as_int(values.get("min_announce_interval_seconds"), 3600, minimum=0),
+            github_token=_as_masked_token(values.get("github_token")),
+            admin_only=_as_bool(values.get("admin_only"), True),
+            allowed_group_ids=_as_string_tuple(values.get("allowed_group_ids")),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-compatible representation without hiding runtime values."""
+        """Return a JSON-compatible representation with the token masked."""
         return {
             "window_hours": self.window_hours,
             "cache_ttl_seconds": self.cache_ttl_seconds,
@@ -79,7 +127,7 @@ class PluginConfig:
             "auto_check_interval_seconds": self.auto_check_interval_seconds,
             "announce_only_on_change": self.announce_only_on_change,
             "min_announce_interval_seconds": self.min_announce_interval_seconds,
-            "github_token": self.github_token,
+            "github_token": "***" if self.github_token else "",
             "admin_only": self.admin_only,
             "allowed_group_ids": list(self.allowed_group_ids),
         }

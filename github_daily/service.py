@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from datetime import datetime, timezone
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
 from .cache import ActivityCache
 from .classifier import classify_summary, summarize_activities
@@ -14,8 +14,9 @@ from .errors import AccountNotFoundError, InvalidAccountError
 from .github_adapter import GitHubAdapter
 from .models import AccountCheckResult, WatchedAccount, WatchState
 
-PersistLoader = Callable[[], Awaitable[dict[str, list[dict]]]]
-PersistSaver = Callable[[dict[str, list[dict]]], Awaitable[None]]
+PluginData = dict[str, Any]
+PersistLoader = Callable[[], Awaitable[PluginData]]
+PersistSaver = Callable[[PluginData], Awaitable[None]]
 
 
 class ContributionService:
@@ -74,13 +75,84 @@ class ContributionService:
         await self._save_result(scope, result)
         return result
 
-    async def check_all(self, scope: str) -> list[AccountCheckResult]:
-        """Check every configured account in a chat scope."""
+    async def check_all(self, scope: str) -> tuple[list[AccountCheckResult], list[str]]:
+        """Check every configured account, returning results and failure notes.
+
+        One failing account must not stop the remaining accounts from being
+        checked, so failures are collected instead of raised.
+        """
         accounts = await self.list_accounts(scope)
         results: list[AccountCheckResult] = []
+        failures: list[str] = []
         for account in accounts:
-            results.append(await self.check_account(scope, account.username))
-        return results
+            try:
+                results.append(await self.check_account(scope, account.username))
+            except Exception as exc:  # noqa: BLE001 - reported to the caller
+                failures.append(f"{account.label}: {exc}")
+        return results, failures
+
+    async def remember_scope(self, scope: str, umo: str, group_id: str) -> None:
+        """Store the session origin so scheduled checks can push messages."""
+        data = await self._loader()
+        scopes = data.setdefault("_scopes", {})
+        scopes[scope] = {"umo": umo, "group_id": group_id}
+        await self._saver(data)
+
+    async def auto_check_targets(self, is_group_allowed: Callable[[str], bool]) -> list[tuple[str, str]]:
+        """Return ``(scope, umo)`` pairs eligible for scheduled announcements."""
+        data = await self._loader()
+        scopes = data.get("_scopes", {})
+        targets: list[tuple[str, str]] = []
+        for scope in data:
+            if scope.startswith("_"):
+                continue
+            entry = scopes.get(scope) if isinstance(scopes, dict) else None
+            if not isinstance(entry, dict):
+                continue
+            umo = str(entry.get("umo") or "")
+            group_id = str(entry.get("group_id") or "")
+            if umo and is_group_allowed(group_id):
+                targets.append((scope, umo))
+        return targets
+
+    async def should_announce(self, scope: str, result: AccountCheckResult) -> bool:
+        """Decide whether a result should be pushed, honoring the config flags.
+
+        Records the announcement time when it returns ``True`` so the minimum
+        announcement interval is enforced on later checks.
+        """
+        data = await self._loader()
+        states = data.setdefault("_states", {})
+        key = self._state_key(scope, result)
+        raw_previous = states.get(key)
+        previous = WatchState.from_dict(raw_previous) if isinstance(raw_previous, dict) else None
+        fingerprint = self._fingerprint(result)
+        changed = previous is None or previous.fingerprint != fingerprint
+        within_interval = previous is not None and previous.announced_at is not None and (
+            (result.checked_at - previous.announced_at).total_seconds()
+            < self.config.min_announce_interval_seconds
+        )
+        if previous is None:
+            announce = True
+        elif self.config.announce_only_on_change and not changed:
+            announce = False
+        elif within_interval:
+            announce = False
+        else:
+            announce = True
+
+        if announce:
+            # Deliver the current state and start a new interval.
+            pending = fingerprint
+            announced_at = result.checked_at
+        else:
+            # Keep the previous fingerprint so a rate-limited change stays
+            # pending and is announced once the interval has elapsed.
+            pending = fingerprint if not changed else previous.fingerprint
+            announced_at = previous.announced_at if previous else None
+        states[key] = WatchState(result.status, pending, announced_at).to_dict()
+        await self._saver(data)
+        return announce
 
     async def _get_events(self, username: str):
         """Read events from cache or fetch them after cooldown enforcement."""
@@ -95,15 +167,23 @@ class ContributionService:
         self._cache.set(username.lower(), events)
         return events
 
+    @staticmethod
+    def _state_key(scope: str, result: AccountCheckResult) -> str:
+        """Return the persistence key for one account in one chat scope."""
+        return f"{scope}:{result.account.username.lower()}"
+
+    @staticmethod
+    def _fingerprint(result: AccountCheckResult) -> str:
+        """Hash the parts of a result that make an announcement worthwhile."""
+        latest_id = result.summary.latest_activity.event_id if result.summary.latest_activity else ""
+        source = f"{result.status}:{result.summary.total_count}:{result.summary.code_count}:{latest_id}"
+        return hashlib.sha256(source.encode()).hexdigest()
+
     async def _save_result(self, scope: str, result: AccountCheckResult) -> None:
-        """Persist the latest result and its announcement fingerprint."""
+        """Persist the latest result without touching announcement state."""
         data = await self._loader()
         results = data.setdefault("_results", {})
-        states = data.setdefault("_states", {})
-        key = f"{scope}:{result.account.username.lower()}"
-        results[key] = result.to_dict()
-        fingerprint_source = f"{result.status}:{result.summary.total_count}:{result.summary.code_count}:{result.summary.latest_activity.event_id if result.summary.latest_activity else ''}"
-        states[key] = WatchState(result.status, hashlib.sha256(fingerprint_source.encode()).hexdigest()).to_dict()
+        results[self._state_key(scope, result)] = result.to_dict()
         await self._saver(data)
 
     def format_result(self, result: AccountCheckResult) -> str:

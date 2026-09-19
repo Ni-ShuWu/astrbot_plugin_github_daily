@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0 - 2026-09-18
+
+- 实现定时自动播报：定时检查后会主动向白名单群推送结果，此前只有配置项没有实际推送。
+- `announce_only_on_change` 与 `min_announce_interval_seconds` 现在真正生效。
+- 单个账户检查失败不再中断同群其他账户的检查。
+- 配置解析改为严格类型转换，字符串 `"false"` 不再被当成 `true`，非法数字回退到默认值。
+- `github_token` 不再出现在 `repr` 和配置导出中，导出时替换为 `***`。
+- 修正 README 中私聊与白名单的说明，并补充自动播报配置说明。
+- 新增插件市场图标 `logo.png`。
+
 ## 1.1.1 - 2026-09-18
 
 - 修复插件更新后仍复用旧内部模块、导致 `'PluginConfig' object has no attribute 'is_group_allowed'` 的问题。
