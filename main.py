@@ -13,7 +13,7 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star
 
 
-def _import_bundled_modules() -> tuple[type, type, type]:
+def _import_bundled_modules() -> tuple[type, type, type, type]:
     """Import bundled modules in a way that survives AstrBot plugin reloads.
 
     AstrBot purges plugin modules from ``sys.modules`` on reload, but only for
@@ -24,10 +24,10 @@ def _import_bundled_modules() -> tuple[type, type, type]:
     if __package__:
         try:
             from .github_daily.config import PluginConfig
-            from .github_daily.errors import GitHubDailyError
+            from .github_daily.errors import GitHubDailyError, PermissionDeniedError
             from .github_daily.service import ContributionService
 
-            return PluginConfig, GitHubDailyError, ContributionService
+            return PluginConfig, GitHubDailyError, PermissionDeniedError, ContributionService
         except ImportError:
             pass  # Parent package is unavailable; fall through to path import.
 
@@ -41,13 +41,13 @@ def _import_bundled_modules() -> tuple[type, type, type]:
         del sys.modules[module_name]
 
     from github_daily.config import PluginConfig
-    from github_daily.errors import GitHubDailyError
+    from github_daily.errors import GitHubDailyError, PermissionDeniedError
     from github_daily.service import ContributionService
 
-    return PluginConfig, GitHubDailyError, ContributionService
+    return PluginConfig, GitHubDailyError, PermissionDeniedError, ContributionService
 
 
-PluginConfig, GitHubDailyError, ContributionService = _import_bundled_modules()
+PluginConfig, GitHubDailyError, PermissionDeniedError, ContributionService = _import_bundled_modules()
 
 
 class GithubDailyPlugin(Star):
@@ -73,24 +73,36 @@ class GithubDailyPlugin(Star):
         if not self._config.is_group_allowed(group_id):
             yield event.plain_result("当前群聊不在 GitHub 监督白名单内。")
             return
-        if self._config.admin_only and not event.is_admin():
-            yield event.plain_result("只有管理员可以管理 GitHub 监督。")
-            return
         scope = group_id
         action = action.lower().strip()
+        is_admin = event.is_admin()
         try:
+            if not self._is_action_allowed(action, is_admin):
+                yield event.plain_result(self._denied_text(action))
+                return
             await self._service.remember_scope(scope, event.unified_msg_origin, group_id)
             if action == "add":
                 if not username:
                     yield event.plain_result("用法：/github_watch add <GitHub用户名> [昵称]")
                     return
-                account = await self._service.add_account(scope, username, display_name or None)
+                account = await self._service.add_account(
+                    scope,
+                    username,
+                    display_name or None,
+                    owner_id=event.get_sender_id(),
+                    is_admin=is_admin,
+                )
                 yield event.plain_result(f"已开始监督 {account.label}（@{account.username}）。")
             elif action == "remove":
                 if not username:
                     yield event.plain_result("用法：/github_watch remove <GitHub用户名>")
                     return
-                removed = await self._service.remove_account(scope, username)
+                removed = await self._service.remove_account(
+                    scope,
+                    username,
+                    actor_id=event.get_sender_id(),
+                    is_admin=is_admin,
+                )
                 yield event.plain_result("已移除监督账户。" if removed else "未找到该监督账户。")
             elif action == "list":
                 accounts = await self._service.list_accounts(scope)
@@ -108,6 +120,8 @@ class GithubDailyPlugin(Star):
                 yield event.plain_result("\n\n".join(self._service.format_result(item) for item in results))
             else:
                 yield event.plain_result(self._help_text())
+        except PermissionDeniedError as exc:
+            yield event.plain_result(str(exc))
         except (GitHubDailyError, RuntimeError, ValueError) as exc:
             yield event.plain_result(f"操作失败：{exc}")
         except Exception:
@@ -168,13 +182,34 @@ class GithubDailyPlugin(Star):
         """Persist plugin data to AstrBot's asynchronous KV store."""
         await self.put_kv_data("watch_data", data)
 
+    def _is_action_allowed(self, action: str, is_admin: bool) -> bool:
+        """Return whether the sender may run an action under the current config."""
+        if is_admin:
+            return True
+        if action in {"add", "remove"}:
+            return self._config.allow_self_bind
+        if action in {"check", "status", "list"}:
+            return self._config.allow_public_query
+        return True  # help and unknown actions only print usage.
+
+    @staticmethod
+    def _denied_text(action: str) -> str:
+        """Explain why a non-admin action was refused."""
+        if action in {"add", "remove"}:
+            return "当前配置不允许自助绑定 GitHub 账户，请联系管理员操作。"
+        if action in {"check", "status"}:
+            return "当前配置仅允许管理员查询 GitHub 状态。"
+        if action == "list":
+            return "当前配置仅允许管理员查看监督列表。"
+        return "当前配置不允许该操作。"
+
     @staticmethod
     def _help_text() -> str:
         """Return command help text."""
         return "\n".join([
             "GitHub 监督命令：",
-            "/github_watch add <用户名> [昵称] - 添加监督账户",
-            "/github_watch remove <用户名> - 移除监督账户",
+            "/github_watch add <用户名> [昵称] - 绑定自己的 GitHub 账户",
+            "/github_watch remove <用户名> - 解绑（本人或管理员）",
             "/github_watch list - 查看监督账户",
             "/github_watch check [用户名] - 检查贡献状态",
             "/github_watch help - 查看帮助",

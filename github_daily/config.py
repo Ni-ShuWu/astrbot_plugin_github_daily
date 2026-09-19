@@ -85,7 +85,8 @@ class PluginConfig:
     announce_only_on_change: bool = True
     min_announce_interval_seconds: int = 3600
     github_token: str = field(default="", repr=False)
-    admin_only: bool = True
+    allow_self_bind: bool = True
+    allow_public_query: bool = True
     allowed_group_ids: tuple[str, ...] = ()
 
     def is_group_allowed(self, group_id: str | None) -> bool:
@@ -110,7 +111,8 @@ class PluginConfig:
             announce_only_on_change=_as_bool(values.get("announce_only_on_change"), True),
             min_announce_interval_seconds=_as_int(values.get("min_announce_interval_seconds"), 3600, minimum=0),
             github_token=_as_masked_token(values.get("github_token")),
-            admin_only=_as_bool(values.get("admin_only"), True),
+            allow_self_bind=_as_bool(values.get("allow_self_bind"), True),
+            allow_public_query=_as_bool(values.get("allow_public_query"), True),
             allowed_group_ids=_as_string_tuple(values.get("allowed_group_ids")),
         )
 
@@ -128,6 +130,7 @@ class PluginConfig:
             "announce_only_on_change": self.announce_only_on_change,
             "min_announce_interval_seconds": self.min_announce_interval_seconds,
             "github_token": "***" if self.github_token else "",
-            "admin_only": self.admin_only,
+            "allow_self_bind": self.allow_self_bind,
+            "allow_public_query": self.allow_public_query,
             "allowed_group_ids": list(self.allowed_group_ids),
         }

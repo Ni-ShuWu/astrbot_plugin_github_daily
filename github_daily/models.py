@@ -32,11 +32,16 @@ class WatchedAccount:
     username: str
     display_name: str | None = None
     added_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    owner_id: str | None = None
 
     @property
     def label(self) -> str:
         """Return the preferred human-readable account name."""
         return self.display_name or self.username
+
+    def is_owned_by(self, actor_id: str | None) -> bool:
+        """Return whether a chat user bound this account."""
+        return bool(self.owner_id) and self.owner_id == actor_id
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible representation."""
@@ -44,6 +49,7 @@ class WatchedAccount:
             "username": self.username,
             "display_name": self.display_name,
             "added_at": _format_datetime(self.added_at),
+            "owner_id": self.owner_id,
         }
 
     @classmethod
@@ -53,6 +59,7 @@ class WatchedAccount:
             username=str(data["username"]),
             display_name=data.get("display_name"),
             added_at=_parse_datetime(data.get("added_at")) or datetime.now(timezone.utc),
+            owner_id=str(data["owner_id"]) if data.get("owner_id") else None,
         )
 
 

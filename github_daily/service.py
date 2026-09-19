@@ -10,13 +10,27 @@ from typing import Any, Awaitable, Callable
 from .cache import ActivityCache
 from .classifier import classify_summary, summarize_activities
 from .config import PluginConfig
-from .errors import AccountNotFoundError, InvalidAccountError
+from .errors import AccountNotFoundError, InvalidAccountError, PermissionDeniedError
 from .github_adapter import GitHubAdapter
 from .models import AccountCheckResult, WatchedAccount, WatchState
 
 PluginData = dict[str, Any]
 PersistLoader = Callable[[], Awaitable[PluginData]]
 PersistSaver = Callable[[PluginData], Awaitable[None]]
+
+
+def _rebind_denied_text(account: WatchedAccount) -> str:
+    """Explain why a non-admin cannot rebind an existing account."""
+    if account.owner_id:
+        return f"{account.label} 已由其他群成员绑定，请联系管理员处理。"
+    return f"{account.label} 是旧版本创建的绑定，没有归属者，请联系管理员处理。"
+
+
+def _unbind_denied_text(account: WatchedAccount) -> str:
+    """Explain why a non-admin cannot unbind an existing account."""
+    if account.owner_id:
+        return f"{account.label} 由其他群成员绑定，请本人或管理员来解绑。"
+    return f"{account.label} 是旧版本创建的绑定，没有归属者，只能由管理员解绑。"
 
 
 class ContributionService:
@@ -31,27 +45,65 @@ class ContributionService:
         self._adapter = GitHubAdapter(config.github_token, config.request_timeout_seconds, config.max_retries)
         self._cache: ActivityCache = ActivityCache(config.cache_ttl_seconds, config.request_cooldown_seconds)
 
-    async def add_account(self, scope: str, username: str, display_name: str | None = None) -> WatchedAccount:
-        """Add or replace a watched account in a chat scope."""
+    async def add_account(
+        self,
+        scope: str,
+        username: str,
+        display_name: str | None = None,
+        *,
+        owner_id: str | None = None,
+        is_admin: bool = False,
+    ) -> WatchedAccount:
+        """Bind an account to the chat user who requested it.
+
+        A binding belongs to whoever created it. Non-admins can only rebind an
+        account they already own; admins may manage any binding.
+        """
         normalized = username.strip()
         if not self.USERNAME_PATTERN.fullmatch(normalized):
             raise InvalidAccountError("GitHub 用户名格式无效")
         data = await self._loader()
         accounts = [WatchedAccount.from_dict(item) for item in data.get(scope, [])]
-        account = WatchedAccount(normalized, display_name.strip() if display_name else None)
+        existing = next(
+            (item for item in accounts if item.username.lower() == normalized.lower()),
+            None,
+        )
+        if existing is not None and not existing.is_owned_by(owner_id) and not is_admin:
+            raise PermissionDeniedError(_rebind_denied_text(existing))
+        account = WatchedAccount(
+            username=normalized,
+            display_name=display_name.strip() if display_name else None,
+            owner_id=owner_id,
+        )
         accounts = [item for item in accounts if item.username.lower() != normalized.lower()]
         accounts.append(account)
         data[scope] = [item.to_dict() for item in accounts]
         await self._saver(data)
         return account
 
-    async def remove_account(self, scope: str, username: str) -> bool:
-        """Remove a watched account and return whether it existed."""
+    async def remove_account(
+        self,
+        scope: str,
+        username: str,
+        *,
+        actor_id: str | None = None,
+        is_admin: bool = False,
+    ) -> bool:
+        """Remove an account the actor owns, or any account for an admin.
+
+        Returns ``False`` when the account is not configured for this scope.
+        """
         data = await self._loader()
         old = [WatchedAccount.from_dict(item) for item in data.get(scope, [])]
-        new = [item for item in old if item.username.lower() != username.strip().lower()]
-        if len(old) == len(new):
+        target = next(
+            (item for item in old if item.username.lower() == username.strip().lower()),
+            None,
+        )
+        if target is None:
             return False
+        if not target.is_owned_by(actor_id) and not is_admin:
+            raise PermissionDeniedError(_unbind_denied_text(target))
+        new = [item for item in old if item.username.lower() != target.username.lower()]
         data[scope] = [item.to_dict() for item in new]
         await self._saver(data)
         return True

@@ -55,9 +55,14 @@
     "description": "自动播报最短间隔（秒）",
     "default": 3600
   },
-  "admin_only": {
+  "allow_self_bind": {
     "type": "bool",
-    "description": "是否限制管理命令为管理员使用",
+    "description": "允许非管理员绑定和解绑自己的 GitHub 账户",
+    "default": true
+  },
+  "allow_public_query": {
+    "type": "bool",
+    "description": "允许非管理员使用 list 和 check 查询贡献状态",
     "default": true
   },
   "allowed_group_ids": {

@@ -4,8 +4,8 @@
 
 ## 功能
 
-- `/github_watch add <用户名> [昵称]` 添加监督账户
-- `/github_watch remove <用户名>` 移除账户
+- `/github_watch add <用户名> [昵称]` 绑定 GitHub 账户（无需管理员）
+- `/github_watch remove <用户名>` 解绑自己的账户
 - `/github_watch list` 查看当前群账户
 - `/github_watch check [用户名]` 检查最近活动
 - `/github_watch help` 查看帮助
@@ -31,6 +31,29 @@ pip install -r requirements.txt
 - 群聊 ID 不在白名单内：命令不响应，也不会收到任何播报。
 - 私聊：不响应命令，也不会收到播报。私聊没有群聊 ID，因此无法加入白名单。
 - 白名单留空：插件在任何会话中都不工作。
+
+## 权限
+
+每个绑定都属于执行绑定操作的群成员本人。管理员可以管理所有人的绑定。
+
+| 操作 | 普通群成员 | 管理员 |
+| --- | --- | --- |
+| 绑定自己的账户 | 允许 | 允许 |
+| 解绑自己的账户 | 允许 | 允许 |
+| 绑定/解绑他人的账户 | 拒绝 | 允许 |
+| 重新绑定已有他人账户 | 拒绝 | 允许 |
+| `list` / `check` / `status` | 由 `allow_public_query` 控制 | 允许 |
+
+两个开关：
+
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `allow_self_bind` | `true` | 关闭后，绑定与解绑都只允许管理员操作 |
+| `allow_public_query` | `true` | 关闭后，`list` 和 `check` 只允许管理员使用 |
+
+`check` 会实际请求 GitHub API 并消耗限额，如果群内查询频繁，可以关闭 `allow_public_query`，只让管理员查询。
+
+由旧版本创建的绑定没有归属者信息，这类账户只能由管理员解绑。
 
 ## 自动播报
 
