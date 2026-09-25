@@ -10,6 +10,12 @@ from .config import DEFAULT_CODE_EVENT_TYPES
 from .models import ActivitySummary, GitHubActivity
 
 
+def filter_by_repository(activities: Iterable[GitHubActivity], repository: str) -> list[GitHubActivity]:
+    """Return the activities that happened in one ``owner/name`` repository."""
+    target = repository.strip().lower()
+    return [item for item in activities if (item.repository or "").strip().lower() == target]
+
+
 def summarize_activities(
     activities: Iterable[GitHubActivity],
     *,

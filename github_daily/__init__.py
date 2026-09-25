@@ -5,6 +5,8 @@ from .models import (
     AccountCheckResult,
     ActivitySummary,
     GitHubActivity,
+    RepoContributionReport,
+    RepositoryRef,
     WatchedAccount,
     WatchState,
 )
@@ -14,6 +16,8 @@ __all__ = [
     "ActivitySummary",
     "GitHubActivity",
     "PluginConfig",
+    "RepoContributionReport",
+    "RepositoryRef",
     "WatchedAccount",
     "WatchState",
 ]

@@ -67,8 +67,8 @@ class GithubDailyPlugin(Star):
             self._task = asyncio.create_task(self._monitor_loop())
 
     @filter.command("github_watch")
-    async def github_watch(self, event: AstrMessageEvent, action: str = "help", username: str = "", display_name: str = ""):
-        """管理 GitHub 监督：add/remove/list/check/status/help。"""
+    async def github_watch(self, event: AstrMessageEvent, action: str = "help", target: str = "", extra: str = ""):
+        """管理 GitHub 监督：add/remove/list/check/repo/status/help。"""
         group_id = str(event.get_group_id() or "").strip()
         if not self._config.is_group_allowed(group_id):
             yield event.plain_result("当前群聊不在 GitHub 监督白名单内。")
@@ -82,24 +82,24 @@ class GithubDailyPlugin(Star):
                 return
             await self._service.remember_scope(scope, event.unified_msg_origin, group_id)
             if action == "add":
-                if not username:
+                if not target:
                     yield event.plain_result("用法：/github_watch add <GitHub用户名> [昵称]")
                     return
                 account = await self._service.add_account(
                     scope,
-                    username,
-                    display_name or None,
+                    target,
+                    extra or None,
                     owner_id=event.get_sender_id(),
                     is_admin=is_admin,
                 )
                 yield event.plain_result(f"已开始监督 {account.label}（@{account.username}）。")
             elif action == "remove":
-                if not username:
+                if not target:
                     yield event.plain_result("用法：/github_watch remove <GitHub用户名>")
                     return
                 removed = await self._service.remove_account(
                     scope,
-                    username,
+                    target,
                     actor_id=event.get_sender_id(),
                     is_admin=is_admin,
                 )
@@ -110,12 +110,21 @@ class GithubDailyPlugin(Star):
                     yield event.plain_result("当前群没有配置监督账户。")
                     return
                 yield event.plain_result("当前监督账户：\n" + "\n".join(f"- {item.label} (@{item.username})" for item in accounts))
+            elif action == "repo":
+                if not target:
+                    yield event.plain_result("用法：/github_watch repo <owner/repo>")
+                    return
+                if not await self._service.list_accounts(scope):
+                    yield event.plain_result("当前群没有配置监督账户。")
+                    return
+                report = await self._service.check_repository(scope, target)
+                yield event.plain_result(self._service.format_repo_report(report))
             elif action in {"check", "status"}:
                 accounts = await self._service.list_accounts(scope)
                 if not accounts:
                     yield event.plain_result("当前群没有配置监督账户。")
                     return
-                targets = [username] if username else [item.username for item in accounts]
+                targets = [target] if target else [item.username for item in accounts]
                 results = [await self._service.check_account(scope, item) for item in targets]
                 yield event.plain_result("\n\n".join(self._service.format_result(item) for item in results))
             else:
@@ -188,7 +197,7 @@ class GithubDailyPlugin(Star):
             return True
         if action in {"add", "remove"}:
             return self._config.allow_self_bind
-        if action in {"check", "status", "list"}:
+        if action in {"check", "status", "list", "repo"}:
             return self._config.allow_public_query
         return True  # help and unknown actions only print usage.
 
@@ -197,7 +206,7 @@ class GithubDailyPlugin(Star):
         """Explain why a non-admin action was refused."""
         if action in {"add", "remove"}:
             return "当前配置不允许自助绑定 GitHub 账户，请联系管理员操作。"
-        if action in {"check", "status"}:
+        if action in {"check", "status", "repo"}:
             return "当前配置仅允许管理员查询 GitHub 状态。"
         if action == "list":
             return "当前配置仅允许管理员查看监督列表。"
@@ -212,5 +221,6 @@ class GithubDailyPlugin(Star):
             "/github_watch remove <用户名> - 解绑（本人或管理员）",
             "/github_watch list - 查看监督账户",
             "/github_watch check [用户名] - 检查贡献状态",
+            "/github_watch repo <owner/repo> - 查看绑定成员在该仓库的贡献",
             "/github_watch help - 查看帮助",
         ])

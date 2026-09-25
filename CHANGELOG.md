@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.0 - 2026-09-25
+
+- 新增 `/github_watch repo <owner/repo>`：汇总群内全部绑定成员在该仓库最近 `window_hours` 小时的公开贡献，按代码活动排序，并单独列出无活动成员。
+- 仓库参数支持 `owner/repo`、github.com 链接（可带 `tree/...` 后缀或 `user:token@` 前缀）和 `git@github.com:` 远程地址，非 github.com 主机与非法格式会给出明确提示。
+- 单个成员拉取失败只记录为该成员的“查询失败”，不影响其他成员的结果。
+- `repo` 复用 `check` 的活动缓存，遵循同一账户的请求冷却；权限由 `allow_public_query` 控制。
+- 命令参数由 `username` / `display_name` 改名为 `target` / `extra`，以覆盖账户名与仓库名两种取值（位置不变，不影响用法）。
+
 ## 1.3.0 - 2026-09-18
 
 - 非管理员现在可以自助绑定和解绑自己的 GitHub 账户，不再要求 op 权限。
