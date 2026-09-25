@@ -62,12 +62,17 @@
   },
   "allow_public_query": {
     "type": "bool",
-    "description": "允许非管理员使用 list 和 check 查询贡献状态",
+    "description": "允许非管理员使用 list、check 和 repo 查询贡献状态",
     "default": true
   },
   "allowed_group_ids": {
     "type": "list",
     "description": "允许使用和接收推送的群聊 ID；留空表示不允许任何群聊",
     "default": []
+  },
+  "max_accounts_per_scope": {
+    "type": "int",
+    "description": "每个群允许绑定的 GitHub 账户上限",
+    "default": 20
   }
 }

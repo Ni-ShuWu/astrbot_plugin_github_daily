@@ -8,6 +8,7 @@
 - `/github_watch remove <用户名>` 解绑自己的账户
 - `/github_watch list` 查看当前群账户
 - `/github_watch check [用户名]` 检查最近活动
+- `/github_watch repo <owner/repo>` 查看绑定成员在该仓库的贡献
 - `/github_watch help` 查看帮助
 - 可选定时自动检查与主动播报（默认关闭）
 - 内置 TTL 缓存、请求冷却、失败重试和 GitHub Token 配置
@@ -40,20 +41,38 @@ pip install -r requirements.txt
 | --- | --- | --- |
 | 绑定自己的账户 | 允许 | 允许 |
 | 解绑自己的账户 | 允许 | 允许 |
-| 绑定/解绑他人的账户 | 拒绝 | 允许 |
 | 重新绑定已有他人账户 | 拒绝 | 允许 |
-| `list` / `check` / `status` | 由 `allow_public_query` 控制 | 允许 |
+| `list` / `check` / `status` / `repo` | 由 `allow_public_query` 控制 | 允许 |
 
 两个开关：
 
 | 配置项 | 默认值 | 说明 |
 | --- | --- | --- |
 | `allow_self_bind` | `true` | 关闭后，绑定与解绑都只允许管理员操作 |
-| `allow_public_query` | `true` | 关闭后，`list` 和 `check` 只允许管理员使用 |
+| `allow_public_query` | `true` | 关闭后，`list`、`check` 和 `repo` 只允许管理员使用 |
+| `max_accounts_per_scope` | `20` | 每个群允许绑定的 GitHub 账户上限，达到上限后需先解绑账户 |
 
-`check` 会实际请求 GitHub API 并消耗限额，如果群内查询频繁，可以关闭 `allow_public_query`，只让管理员查询。
+`check` 和 `repo` 会实际请求 GitHub API 并消耗限额，如果群内查询频繁，可以关闭 `allow_public_query`，只让管理员查询。每群绑定上限用于限制自助绑定规模，减少查询带来的 API 请求量。
+
+昵称会剥离控制字符并截断至 64 个字符。
 
 由旧版本创建的绑定没有归属者信息，这类账户只能由管理员解绑。
+
+## 仓库贡献查询
+
+`/github_watch repo <owner/repo>` 汇总**当前群全部绑定成员**在该仓库的贡献，时间窗口与 `check` 一致（`window_hours`，默认 24 小时）：
+
+```text
+仓库 Ni-ShuWu/astrbot_plugin_github_daily 最近 24 小时绑定成员贡献：
+- 张三 (@zhangsan)：代码活动 3，普通活动 1，最近 PushEvent
+- 无公开活动：李四
+共 2 位绑定成员，1 位有贡献。
+```
+
+- 仓库参数可写成 `owner/repo`、`https://github.com/owner/repo`（带 `/tree/main` 后缀或 `user:token@` 前缀也可）、`git@github.com:owner/repo.git`，只支持 github.com。
+- 只统计绑定成员的公开事件，匹配仓库名时不区分大小写；代码活动与普通活动的划分沿用 `code_event_types`。
+- 结果按代码活动数排序，无贡献的成员单独列在“无公开活动”之后；某个成员拉取失败只显示为一行的“查询失败”，不影响其他成员。
+- 查询复用与 `check` 相同的缓存和冷却，因此刚查过 `check` 时不会重复请求 GitHub API。
 
 ## 自动播报
 
@@ -94,8 +113,3 @@ py -3 -m compileall -q .
 
 `github_token` 仅用于请求 GitHub API，不会出现在任何对外输出中，插件导出的配置会把该字段替换为 `***`。
 
-## 插件市场信息
-
-- 依赖：`httpx`，由 AstrBot 插件管理器根据 `requirements.txt` 自动安装。
-- 图标：仓库根目录的 `logo.png`。
-- 仓库：https://github.com/Ni-ShuWu/astrbot_plugin_github_daily

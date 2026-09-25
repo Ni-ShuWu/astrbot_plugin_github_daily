@@ -28,5 +28,9 @@ class InvalidAccountError(GitHubDailyError):
     """Raised when a GitHub username does not pass validation."""
 
 
+class InvalidRepositoryError(GitHubDailyError):
+    """Raised when a repository does not pass validation."""
+
+
 class PermissionDeniedError(GitHubDailyError):
     """Raised when a chat user is not allowed to manage an account."""

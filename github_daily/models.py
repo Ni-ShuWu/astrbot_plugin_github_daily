@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+
+from .errors import InvalidRepositoryError
+
+REPOSITORY_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}$")
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
@@ -23,6 +28,53 @@ def _format_datetime(value: datetime | None) -> str | None:
         return None
     normalized = value.astimezone(timezone.utc)
     return normalized.isoformat().replace("+00:00", "Z")
+
+
+@dataclass(slots=True, frozen=True)
+class RepositoryRef:
+    """A GitHub repository identified by its owner and name."""
+
+    owner: str
+    name: str
+
+    @property
+    def slug(self) -> str:
+        """Return the canonical ``owner/name`` slug used by the events API."""
+        return f"{self.owner}/{self.name}"
+
+    @classmethod
+    def parse(cls, value: str) -> "RepositoryRef":
+        """Parse ``owner/name``, a github.com URL or an SSH remote into a reference."""
+        text = str(value or "").strip()
+        host = ""
+        if text.startswith("git@"):
+            host, _, path = text.partition(":")
+            host = host[len("git@"):]
+        elif "://" in text:
+            host, _, path = text.split("://", 1)[1].partition("/")
+            host = host.split("@")[-1]  # Drop credentials such as user:token@.
+        else:
+            path = text
+        if not host and path.lower().startswith("github.com/"):
+            host, _, path = path.partition("/")
+        if host and host.lower() != "github.com":
+            raise InvalidRepositoryError("目前只支持 github.com 上的仓库")
+        if path.endswith(".git"):
+            path = path[: -len(".git")]
+        segments = [part for part in path.strip("/").split("/") if part]
+        if host:
+            segments = segments[:2]  # A pasted URL may carry a /tree/main suffix.
+        slug = "/".join(segments)
+        if not REPOSITORY_SLUG_PATTERN.fullmatch(slug):
+            raise InvalidRepositoryError(
+                "仓库格式无效，请使用 owner/repo，例如 Ni-ShuWu/astrbot_plugin_github_daily",
+            )
+        owner, name = slug.split("/", 1)
+        if owner in {".", ".."} or name in {".", ".."}:
+            raise InvalidRepositoryError(
+                "仓库格式无效，请使用 owner/repo，例如 Ni-ShuWu/astrbot_plugin_github_daily",
+            )
+        return cls(owner=owner, name=name)
 
 
 @dataclass(slots=True, frozen=True)
@@ -202,3 +254,25 @@ class WatchState:
             fingerprint=str(data["fingerprint"]),
             announced_at=_parse_datetime(data.get("announced_at")),
         )
+
+
+@dataclass(slots=True, frozen=True)
+class RepoContributionReport:
+    """Contributions of one scope's bound members inside a single repository.
+
+    ``contributions`` holds members with activity in the repository, sorted by
+    code activity. ``silent_members`` lists bound members without any activity
+    there, and ``failures`` carries members whose events could not be read.
+    """
+
+    repository: RepositoryRef
+    checked_at: datetime
+    window_hours: int
+    contributions: tuple[AccountCheckResult, ...] = ()
+    silent_members: tuple[str, ...] = ()
+    failures: tuple[str, ...] = ()
+
+    @property
+    def member_count(self) -> int:
+        """Return how many bound members the report accounts for."""
+        return len(self.contributions) + len(self.silent_members) + len(self.failures)

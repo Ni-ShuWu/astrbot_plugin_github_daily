@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
 from .cache import ActivityCache
-from .classifier import classify_summary, summarize_activities
+from .classifier import classify_summary, filter_by_repository, summarize_activities
 from .config import PluginConfig
 from .errors import AccountNotFoundError, InvalidAccountError, PermissionDeniedError
 from .github_adapter import GitHubAdapter
-from .models import AccountCheckResult, WatchedAccount, WatchState
+from .models import AccountCheckResult, RepoContributionReport, RepositoryRef, WatchedAccount, WatchState
 
 PluginData = dict[str, Any]
 PersistLoader = Callable[[], Awaitable[PluginData]]
@@ -70,9 +71,15 @@ class ContributionService:
         )
         if existing is not None and not existing.is_owned_by(owner_id) and not is_admin:
             raise PermissionDeniedError(_rebind_denied_text(existing))
+        if existing is None and len(accounts) >= self.config.max_accounts_per_scope:
+            raise InvalidAccountError("该群绑定账户已达上限")
+        cleaned_name = "".join(
+            char for char in (display_name or "").strip()
+            if not unicodedata.category(char).startswith("C")
+        )[:64]
         account = WatchedAccount(
             username=normalized,
-            display_name=display_name.strip() if display_name else None,
+            display_name=cleaned_name or None,
             owner_id=owner_id,
         )
         accounts = [item for item in accounts if item.username.lower() != normalized.lower()]
@@ -142,6 +149,51 @@ class ContributionService:
             except Exception as exc:  # noqa: BLE001 - reported to the caller
                 failures.append(f"{account.label}: {exc}")
         return results, failures
+
+    async def check_repository(self, scope: str, repository: str) -> RepoContributionReport:
+        """Summarize bound members' contribution inside one repository.
+
+        Every account bound in ``scope`` is checked against the configured
+        window. Members without public activity in that repository are reported
+        separately, and a member whose events cannot be read is recorded as a
+        failure instead of aborting the whole query.
+        """
+        ref = RepositoryRef.parse(repository)
+        accounts = await self.list_accounts(scope)
+        if not accounts:
+            raise AccountNotFoundError("当前群没有配置监督账户。")
+        now = datetime.now(timezone.utc)
+        contributions: list[AccountCheckResult] = []
+        silent_members: list[str] = []
+        failures: list[str] = []
+        for account in accounts:
+            try:
+                activities = await self._get_events(account.username)
+            except Exception as exc:  # noqa: BLE001 - reported per member
+                failures.append(f"{account.label}: {exc}")
+                continue
+            summary = summarize_activities(
+                filter_by_repository(activities, ref.slug),
+                window_hours=self.config.window_hours,
+                code_event_types=self.config.code_event_types,
+                now=now,
+            )
+            if summary.total_count == 0:
+                silent_members.append(account.label)
+                continue
+            is_coding, status = classify_summary(summary)
+            contributions.append(
+                AccountCheckResult(account, now, self.config.window_hours, summary, is_coding, status),
+            )
+        contributions.sort(key=lambda item: (item.summary.code_count, item.summary.total_count), reverse=True)
+        return RepoContributionReport(
+            repository=ref,
+            checked_at=now,
+            window_hours=self.config.window_hours,
+            contributions=tuple(contributions),
+            silent_members=tuple(silent_members),
+            failures=tuple(failures),
+        )
 
     async def remember_scope(self, scope: str, umo: str, group_id: str) -> None:
         """Store the session origin so scheduled checks can push messages."""
@@ -252,4 +304,23 @@ class ContributionService:
         if summary.latest_activity:
             latest = summary.latest_activity
             lines.insert(4, f"- 最近活动：{latest.event_type} / {latest.repository or '未知仓库'}")
+        return "\n".join(lines)
+
+    def format_repo_report(self, report: RepoContributionReport) -> str:
+        """Format a repository contribution report as a Chinese chat message."""
+        lines = [f"仓库 {report.repository.slug} 最近 {report.window_hours} 小时绑定成员贡献："]
+        if report.contributions:
+            for item in report.contributions:
+                summary = item.summary
+                detail = f"代码活动 {summary.code_count}，普通活动 {summary.ordinary_count}"
+                if summary.latest_activity is not None:
+                    detail += f"，最近 {summary.latest_activity.event_type}"
+                lines.append(f"- {item.account.label} (@{item.account.username})：{detail}")
+        else:
+            lines.append("- 没有成员在该仓库产生公开活动")
+        if report.silent_members:
+            lines.append(f"- 无公开活动：{'、'.join(report.silent_members)}")
+        if report.failures:
+            lines.append(f"- 查询失败：{'；'.join(report.failures)}")
+        lines.append(f"共 {report.member_count} 位绑定成员，{len(report.contributions)} 位有贡献。")
         return "\n".join(lines)
