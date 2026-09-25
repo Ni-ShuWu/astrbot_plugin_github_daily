@@ -88,6 +88,7 @@ class PluginConfig:
     allow_self_bind: bool = True
     allow_public_query: bool = True
     allowed_group_ids: tuple[str, ...] = ()
+    max_accounts_per_scope: int = 20
 
     def is_group_allowed(self, group_id: str | None) -> bool:
         """Return whether a group is included in the configured whitelist."""
@@ -114,6 +115,7 @@ class PluginConfig:
             allow_self_bind=_as_bool(values.get("allow_self_bind"), True),
             allow_public_query=_as_bool(values.get("allow_public_query"), True),
             allowed_group_ids=_as_string_tuple(values.get("allowed_group_ids")),
+            max_accounts_per_scope=_as_int(values.get("max_accounts_per_scope"), 20, minimum=1),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -133,4 +135,5 @@ class PluginConfig:
             "allow_self_bind": self.allow_self_bind,
             "allow_public_query": self.allow_public_query,
             "allowed_group_ids": list(self.allowed_group_ids),
+            "max_accounts_per_scope": self.max_accounts_per_scope,
         }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
@@ -70,9 +71,15 @@ class ContributionService:
         )
         if existing is not None and not existing.is_owned_by(owner_id) and not is_admin:
             raise PermissionDeniedError(_rebind_denied_text(existing))
+        if existing is None and len(accounts) >= self.config.max_accounts_per_scope:
+            raise InvalidAccountError("该群绑定账户已达上限")
+        cleaned_name = "".join(
+            char for char in (display_name or "").strip()
+            if not unicodedata.category(char).startswith("C")
+        )[:64]
         account = WatchedAccount(
             username=normalized,
-            display_name=display_name.strip() if display_name else None,
+            display_name=cleaned_name or None,
             owner_id=owner_id,
         )
         accounts = [item for item in accounts if item.username.lower() != normalized.lower()]

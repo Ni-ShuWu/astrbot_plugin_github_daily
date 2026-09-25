@@ -70,6 +70,10 @@ class RepositoryRef:
                 "仓库格式无效，请使用 owner/repo，例如 Ni-ShuWu/astrbot_plugin_github_daily",
             )
         owner, name = slug.split("/", 1)
+        if owner in {".", ".."} or name in {".", ".."}:
+            raise InvalidRepositoryError(
+                "仓库格式无效，请使用 owner/repo，例如 Ni-ShuWu/astrbot_plugin_github_daily",
+            )
         return cls(owner=owner, name=name)
 
 

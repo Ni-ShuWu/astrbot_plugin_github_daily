@@ -50,8 +50,11 @@ pip install -r requirements.txt
 | --- | --- | --- |
 | `allow_self_bind` | `true` | 关闭后，绑定与解绑都只允许管理员操作 |
 | `allow_public_query` | `true` | 关闭后，`list`、`check` 和 `repo` 只允许管理员使用 |
+| `max_accounts_per_scope` | `20` | 每个群允许绑定的 GitHub 账户上限，达到上限后需先解绑账户 |
 
-`check` 和 `repo` 会实际请求 GitHub API 并消耗限额，如果群内查询频繁，可以关闭 `allow_public_query`，只让管理员查询。
+`check` 和 `repo` 会实际请求 GitHub API 并消耗限额，如果群内查询频繁，可以关闭 `allow_public_query`，只让管理员查询。每群绑定上限用于限制自助绑定规模，减少查询带来的 API 请求量。
+
+昵称会剥离控制字符并截断至 64 个字符。
 
 由旧版本创建的绑定没有归属者信息，这类账户只能由管理员解绑。
 
