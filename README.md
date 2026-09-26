@@ -1,6 +1,6 @@
 # astrbot_plugin_github_daily
 
-一个用于 AstrBot 群聊的 GitHub 代码活动监督插件：绑定群友的 GitHub 用户名后，查询其最近公开活动，并判断是“正在写代码”“有活动但无法确认”还是“疑似摸鱼”。
+一个用于 AstrBot 群聊的 GitHub 代码活动监督插件：绑定群友的 GitHub 用户名后，查询其最近公开活动，并判断是“正在写代码”“有活动但无法确认”还是“疑似摸鱼”。命令支持 `/github_watch` 和简写 `/ghw`，两者完全等价；子命令也支持简写：`add/a`、`remove/rm`、`list/ls`、`check/c`、`repo/r`、`help/h`。
 
 ## 功能
 

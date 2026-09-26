@@ -12,6 +12,8 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star
 
+__version__ = "1.4.1"
+
 
 def _import_bundled_modules() -> tuple[type, type, type, type]:
     """Import bundled modules in a way that survives AstrBot plugin reloads.
@@ -66,7 +68,7 @@ class GithubDailyPlugin(Star):
         if self._config.auto_check_enabled:
             self._task = asyncio.create_task(self._monitor_loop())
 
-    @filter.command("github_watch")
+    @filter.command("github_watch", alias={"ghw"})
     async def github_watch(self, event: AstrMessageEvent, action: str = "help", target: str = "", extra: str = ""):
         """管理 GitHub 监督：add/remove/list/check/repo/status/help。"""
         group_id = str(event.get_group_id() or "").strip()
@@ -75,6 +77,15 @@ class GithubDailyPlugin(Star):
             return
         scope = group_id
         action = action.lower().strip()
+        action = {
+            "a": "add",
+            "rm": "remove",
+            "ls": "list",
+            "c": "check",
+            "s": "status",
+            "r": "repo",
+            "h": "help",
+        }.get(action, action)
         is_admin = event.is_admin()
         try:
             if not self._is_action_allowed(action, is_admin):
@@ -216,11 +227,11 @@ class GithubDailyPlugin(Star):
     def _help_text() -> str:
         """Return command help text."""
         return "\n".join([
-            "GitHub 监督命令：",
-            "/github_watch add <用户名> [昵称] - 绑定自己的 GitHub 账户",
-            "/github_watch remove <用户名> - 解绑（本人或管理员）",
-            "/github_watch list - 查看监督账户",
-            "/github_watch check [用户名] - 检查贡献状态",
-            "/github_watch repo <owner/repo> - 查看绑定成员在该仓库的贡献",
-            "/github_watch help - 查看帮助",
+            "GitHub 监督命令（/ghw 为 /github_watch 简写）：",
+            "/github_watch add/a <用户名> [昵称] - 绑定自己的 GitHub 账户",
+            "/github_watch remove/rm <用户名> - 解绑（本人或管理员）",
+            "/github_watch list/ls - 查看监督账户",
+            "/github_watch check/status/c/s [用户名] - 检查贡献状态",
+            "/github_watch repo/r <owner/repo> - 查看绑定成员在该仓库的贡献",
+            "/github_watch help/h - 查看帮助",
         ])
