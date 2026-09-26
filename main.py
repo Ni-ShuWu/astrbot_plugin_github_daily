@@ -12,6 +12,8 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star
 
+__version__ = "1.4.1"
+
 
 def _import_bundled_modules() -> tuple[type, type, type, type]:
     """Import bundled modules in a way that survives AstrBot plugin reloads.

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.1 - 2026-09-26
 
 - 为 `/github_watch` 新增简写命令 `/ghw`，并为 `add/remove/list/check/repo/help` 子命令新增 `a/rm/ls/c/r/h` 简写，所有权限和参数行为保持不变。
 
