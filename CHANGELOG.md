@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- 为 `/github_watch` 新增简写命令 `/ghw`，并为 `add/remove/list/check/repo/help` 子命令新增 `a/rm/ls/c/r/h` 简写，所有权限和参数行为保持不变。
+
 ## 1.4.0 - 2026-09-25
 
 - 新增 `/github_watch repo <owner/repo>`：汇总群内全部绑定成员在该仓库最近 `window_hours` 小时的公开贡献，按代码活动排序，并单独列出无活动成员。
