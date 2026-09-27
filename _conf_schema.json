@@ -1,7 +1,7 @@
 {
   "github_token": {
     "type": "string",
-    "description": "可选的 GitHub Personal Access Token，用于提高 API 限额",
+    "description": "可选的 GitHub Personal Access Token；填写后 API 限额从 60 次/小时提升到 5000 次/小时",
     "default": "",
     "secret": true
   },

@@ -220,7 +220,12 @@ class ActivitySummary:
 
 @dataclass(slots=True, frozen=True)
 class AccountCheckResult:
-    """Classification result for one watched account."""
+    """Classification result for one watched account.
+
+    ``stale`` marks a result computed from a cached answer because GitHub could
+    not be queried (spent quota or network failure), so the chat output can say
+    so instead of passing old data off as fresh.
+    """
 
     account: WatchedAccount
     checked_at: datetime
@@ -229,6 +234,7 @@ class AccountCheckResult:
     is_coding: bool
     status: str
     error: str | None = None
+    stale: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible representation."""
@@ -240,6 +246,7 @@ class AccountCheckResult:
             "is_coding": self.is_coding,
             "status": self.status,
             "error": self.error,
+            "stale": self.stale,
         }
 
     @classmethod
@@ -256,6 +263,7 @@ class AccountCheckResult:
             is_coding=bool(data["is_coding"]),
             status=str(data["status"]),
             error=data.get("error"),
+            stale=bool(data.get("stale", False)),
         )
 
 

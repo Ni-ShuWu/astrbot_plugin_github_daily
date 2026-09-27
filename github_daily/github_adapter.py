@@ -11,6 +11,7 @@ import httpx
 
 from .errors import GitHubApiError
 from .models import GitHubActivity
+from .rate_limit import RateLimitTracker
 
 
 class GitHubAdapter:
@@ -18,14 +19,21 @@ class GitHubAdapter:
 
     BASE_URL = "https://api.github.com"
     MAX_COMMIT_MESSAGES = 5
+    #: One request returns the same number of events whatever this is set to,
+    #: so ask for a full page: it costs the same quota and keeps the time-window
+    #: summary accurate for busy accounts.
+    EVENTS_PER_PAGE = 100
+    #: Never sleep longer than this inside a retry; fail fast instead.
+    MAX_RETRY_SLEEP_SECONDS = 30.0
 
     def __init__(self, token: str = "", timeout_seconds: float = 10.0, max_retries: int = 2) -> None:
         self._token = token.strip()
         self._timeout = max(1.0, timeout_seconds)
         self._max_retries = max(0, max_retries)
+        self.rate_limit = RateLimitTracker()
 
     async def fetch_user_events(self, username: str) -> list[GitHubActivity]:
-        """Fetch up to the first 100 public events for a GitHub username."""
+        """Fetch up to the first ``EVENTS_PER_PAGE`` public events for a user."""
         headers = {
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
@@ -37,14 +45,20 @@ class GitHubAdapter:
         for attempt in range(self._max_retries + 1):
             try:
                 async with httpx.AsyncClient(timeout=self._timeout, headers=headers) as client:
-                    response = await client.get(url, params={"per_page": 100})
+                    response = await client.get(url, params={"per_page": self.EVENTS_PER_PAGE})
+                self.rate_limit.observe(response.headers)
                 if response.status_code == 200:
                     payload = response.json()
                     return [self._parse_event(item) for item in payload if isinstance(item, dict)]
                 retry_after = self._retry_after(response)
-                retryable = response.status_code == 429 or response.status_code >= 500
-                if retryable and attempt < self._max_retries:
-                    await asyncio.sleep(retry_after or 2**attempt)
+                delay = retry_after if retry_after is not None else float(2**attempt)
+                retryable = response.status_code >= 500 or (
+                    # A 429 is only worth retrying when the budget is not simply
+                    # spent - retrying an exhausted quota just burns more time.
+                    response.status_code == 429 and self.rate_limit.wait_seconds() <= 0
+                )
+                if retryable and delay <= self.MAX_RETRY_SLEEP_SECONDS and attempt < self._max_retries:
+                    await asyncio.sleep(delay)
                     continue
                 message = self._error_message(response)
                 raise GitHubApiError(message, status_code=response.status_code, retry_after_seconds=retry_after)
@@ -218,13 +232,14 @@ class GitHubAdapter:
             except (TypeError, ValueError, OverflowError):
                 return None
 
-    @staticmethod
-    def _error_message(response: httpx.Response) -> str:
-        """Create a concise human-readable API error."""
+    def _error_message(self, response: httpx.Response) -> str:
+        """Create a concise, accurate API error message."""
         if response.status_code == 404:
             return "GitHub user was not found"
-        if response.status_code in (401, 403):
-            return "GitHub API authorization failed or rate limit was reached"
-        if response.status_code == 429:
+        if response.status_code == 429 or self.rate_limit.state.remaining <= 0:
             return "GitHub API rate limit was reached"
+        if response.status_code == 401:
+            return "GitHub API rejected the configured token"
+        if response.status_code == 403:
+            return "GitHub API authorization failed (token missing or lacking permission)"
         return f"GitHub API returned HTTP {response.status_code}"

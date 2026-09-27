@@ -10,12 +10,15 @@ from .models import (
     WatchedAccount,
     WatchState,
 )
+from .rate_limit import RateLimitState, RateLimitTracker
 
 __all__ = [
     "AccountCheckResult",
     "ActivitySummary",
     "GitHubActivity",
     "PluginConfig",
+    "RateLimitState",
+    "RateLimitTracker",
     "RepoContributionReport",
     "RepositoryRef",
     "WatchedAccount",

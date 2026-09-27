@@ -228,11 +228,17 @@ class GithubDailyPlugin(Star):
                     username = account.username
                 label = account.label if account is not None else username
                 limit = max(1, min(limit, self._config.detail_max_entries))
-                activities = await self._service.fetch_activities(username)
+                activities, stale = await self._service.fetch_activities(username)
                 if not activities:
                     yield event.plain_result(f"{label} (@{username}) 目前没有公开活动记录。")
                     return
-                blocks = self._service.build_detail(activities, username=username, label=label, limit=limit)
+                blocks = self._service.build_detail(
+                    activities,
+                    username=username,
+                    label=label,
+                    limit=limit,
+                    stale=stale,
+                )
                 forward = _forward_result(event, blocks) if self._config.detail_use_forward else None
                 yield forward if forward is not None else event.plain_result("\n\n".join(blocks))
             else:
@@ -268,6 +274,15 @@ class GithubDailyPlugin(Star):
     async def _run_auto_check(self) -> None:
         """Check every eligible scope once and push the results that matter."""
         targets = await self._service.auto_check_targets(self._config.is_group_allowed)
+        budget_wait = self._service.rate_limit_wait_seconds()
+        if budget_wait > 0:
+            # Every account in every scope would be rejected right now, so skip
+            # the whole round instead of spending it on guaranteed failures.
+            logger.warning(
+                "github_daily: 跳过本轮自动检查，GitHub 额度已用尽，预计 %s 后恢复",
+                self._service.format_wait(budget_wait),
+            )
+            return
         for scope, umo in targets:
             results, failures = await self._service.check_all(scope)
             for failure in failures:

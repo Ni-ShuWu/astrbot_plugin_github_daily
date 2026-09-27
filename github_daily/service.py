@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import logging
 import re
 import unicodedata
 from datetime import datetime, timezone
@@ -11,7 +13,7 @@ from typing import Any, Awaitable, Callable, Iterable, Sequence
 from .cache import ActivityCache
 from .classifier import classify_summary, filter_by_repository, summarize_activities
 from .config import PluginConfig
-from .errors import AccountNotFoundError, InvalidAccountError, PermissionDeniedError
+from .errors import AccountNotFoundError, GitHubApiError, InvalidAccountError, PermissionDeniedError
 from .github_adapter import GitHubAdapter
 from .models import (
     AccountCheckResult,
@@ -21,10 +23,17 @@ from .models import (
     WatchedAccount,
     WatchState,
 )
+from .rate_limit import RateLimitState
+
+logger = logging.getLogger(__name__)
 
 PluginData = dict[str, Any]
 PersistLoader = Callable[[], Awaitable[PluginData]]
 PersistSaver = Callable[[PluginData], Awaitable[None]]
+
+#: Stop requesting when GitHub reports this few units left, so a burst can still
+#: report the real reason instead of tripping over an empty budget.
+RATE_LIMIT_RESERVE = 0
 
 #: Human-readable names for the event types rendered by ``detail``.
 DETAIL_EVENT_LABELS = {
@@ -115,6 +124,11 @@ class ContributionService:
         self._saver = saver
         self._adapter = GitHubAdapter(config.github_token, config.request_timeout_seconds, config.max_retries)
         self._cache: ActivityCache = ActivityCache(config.cache_ttl_seconds, config.request_cooldown_seconds)
+        # One lock per username, so several simultaneous queries about the same
+        # account still cost a single GitHub request.
+        self._locks: dict[str, asyncio.Lock] = {}
+        # Remember which exhausted window was already logged, to avoid spam.
+        self._budget_warning_reset: datetime | None = None
 
     async def add_account(
         self,
@@ -200,30 +214,33 @@ class ContributionService:
                 return account
         return None
 
-    async def fetch_activities(self, username: str) -> list[GitHubActivity]:
+    async def fetch_activities(self, username: str) -> tuple[list[GitHubActivity], bool]:
         """Fetch a user's public events, newest first, without a time window.
 
         ``detail`` deliberately ignores ``window_hours``: it promises the newest
         public activity, which must still be shown when it is older than the
         configured check window. GitHub itself keeps only about 90 days of
         public events.
+
+        The boolean is ``True`` when the events came from the stale cache
+        because GitHub could not be queried, so callers can say so.
         """
         normalized = str(username or "").strip()
         if not self.USERNAME_PATTERN.fullmatch(normalized):
             raise InvalidAccountError("GitHub 用户名格式无效")
-        activities = await self._get_events(normalized)
-        return sorted(activities, key=lambda item: item.created_at, reverse=True)
+        activities, stale = await self._get_events(normalized)
+        return sorted(activities, key=lambda item: item.created_at, reverse=True), stale
 
     async def check_account(self, scope: str, username: str) -> AccountCheckResult:
         """Check one configured account and persist its latest state."""
         account = await self.find_account(scope, username)
         if account is None:
             raise AccountNotFoundError(f"未配置 GitHub 账户：{username}")
-        activities = await self._get_events(account.username)
+        activities, stale = await self._get_events(account.username)
         now = datetime.now(timezone.utc)
         summary = summarize_activities(activities, window_hours=self.config.window_hours, code_event_types=self.config.code_event_types, now=now)
         is_coding, status = classify_summary(summary)
-        result = AccountCheckResult(account, now, self.config.window_hours, summary, is_coding, status)
+        result = AccountCheckResult(account, now, self.config.window_hours, summary, is_coding, status, stale=stale)
         await self._save_result(scope, result)
         return result
 
@@ -261,7 +278,7 @@ class ContributionService:
         failures: list[str] = []
         for account in accounts:
             try:
-                activities = await self._get_events(account.username)
+                activities, stale = await self._get_events(account.username)
             except Exception as exc:  # noqa: BLE001 - reported per member
                 failures.append(f"{account.label}: {exc}")
                 continue
@@ -276,7 +293,7 @@ class ContributionService:
                 continue
             is_coding, status = classify_summary(summary)
             contributions.append(
-                AccountCheckResult(account, now, self.config.window_hours, summary, is_coding, status),
+                AccountCheckResult(account, now, self.config.window_hours, summary, is_coding, status, stale=stale),
             )
         contributions.sort(key=lambda item: (item.summary.code_count, item.summary.total_count), reverse=True)
         return RepoContributionReport(
@@ -351,18 +368,129 @@ class ContributionService:
         await self._saver(data)
         return announce
 
-    async def _get_events(self, username: str):
-        """Read events from cache or fetch them after cooldown enforcement."""
-        cached = self._cache.get(username.lower())
+    async def _get_events(self, username: str) -> tuple[list[GitHubActivity], bool]:
+        """Return a user's events plus whether a stale cache had to answer.
+
+        Three things keep the GitHub budget small:
+
+        1. a fresh cache entry is returned without touching the network;
+        2. concurrent queries for the same user share one request through a
+           per-username lock;
+        3. a request that GitHub would certainly reject - because the advertised
+           budget is spent - is never sent, and the last cached answer is reused
+           instead so a rate-limited API degrades to older data, not an error.
+        """
+        key = username.lower()
+        cached = self._cache.get(key)
         if cached is not None:
-            return cached
-        remaining = self._cache.cooldown_remaining(username.lower())
-        if remaining > 0:
-            raise RuntimeError(f"请求过于频繁，请 {remaining:.0f} 秒后再试")
-        self._cache.mark_requested(username.lower())
-        events = await self._adapter.fetch_user_events(username)
-        self._cache.set(username.lower(), events)
-        return events
+            return cached, False
+
+        lock = self._locks.get(key)
+        if lock is None:
+            lock = self._locks.setdefault(key, asyncio.Lock())
+        try:
+            async with lock:
+                # A concurrent caller may have filled the cache while we waited.
+                cached = self._cache.get(key)
+                if cached is not None:
+                    return cached, False
+                # Report a spent budget before the per-user cooldown: it is the
+                # reason the user can actually act on.
+                if self._budget_is_spent():
+                    return await self._stale_or_raise(key)
+                waited = self._cache.cooldown_remaining(key)
+                if waited > 0:
+                    # An expired-but-recent answer beats an error, and it also
+                    # keeps impatient users from retrying and costing more.
+                    fallback = self._cache.get_stale(key)
+                    if fallback is not None:
+                        return fallback, True
+                    raise RuntimeError(f"请求过于频繁，请 {waited:.0f} 秒后再试")
+                self._cache.mark_requested(key)
+                try:
+                    events = await self._adapter.fetch_user_events(username)
+                except GitHubApiError as exc:
+                    # A failing GitHub must not cost the user the answer we
+                    # already have; report it as stale instead.
+                    fallback = self._cache.get_stale(key)
+                    if fallback is None:
+                        raise
+                    logger.warning(
+                        "github_daily: reusing cached events for %s after GitHub error: %s",
+                        username,
+                        exc,
+                    )
+                    return fallback, True
+                self._cache.set(key, events)
+                return events, False
+        finally:
+            if not lock.locked():
+                self._locks.pop(key, None)
+
+    def _budget_is_spent(self) -> bool:
+        """Return whether GitHub's advertised budget forbids another request."""
+        if self.rate_limit_wait_seconds() <= 0:
+            return False
+        # Log at most once per rate-limit window instead of once per account.
+        reset = self._adapter.rate_limit.state.reset_at
+        if reset != self._budget_warning_reset:
+            self._budget_warning_reset = reset
+            logger.warning(
+                "github_daily: GitHub request budget exhausted until %s",
+                reset.isoformat() if reset else "the next window",
+            )
+        return True
+
+    async def _stale_or_raise(self, key: str) -> tuple[list[GitHubActivity], bool]:
+        """Serve the last cached answer, or explain when the budget returns."""
+        fallback = self._cache.get_stale(key)
+        if fallback is not None:
+            return fallback, True
+        wait = self.rate_limit_wait_seconds()
+        reset = self._adapter.rate_limit.state.reset_at
+        when = f"，预计 {self.format_wait(wait)}后恢复" if wait > 0 else ""
+        if reset is not None:
+            when += f"（重置时间 {reset.astimezone().strftime('%H:%M:%S')}）"
+        raise GitHubApiError(
+            f"GitHub API 请求额度已用尽{when}。"
+            "可在插件配置里填写 github_token，把限额从 60 次/小时提升到 5000 次/小时。",
+        )
+
+    def rate_limit_wait_seconds(self) -> float:
+        """Return how long GitHub asks us to wait before the next request."""
+        return self._adapter.rate_limit.wait_seconds(RATE_LIMIT_RESERVE)
+
+    def rate_limit_snapshot(self) -> RateLimitState:
+        """Return the most recent ``X-RateLimit-*`` snapshot."""
+        return self._adapter.rate_limit.state
+
+    def format_quota(self) -> str:
+        """Describe the remaining GitHub budget, or ``""`` while still unknown.
+
+        Surfacing this is the simplest way for a group to see how much of the
+        shared hourly allowance its queries are consuming.
+        """
+        state = self.rate_limit_snapshot()
+        if not state.known or state.limit <= 0:
+            return ""
+        quota = f"API 额度：剩余 {state.remaining}/{state.limit}"
+        if state.reset_at is not None:
+            quota += f"，{state.reset_at.astimezone().strftime('%H:%M:%S')} 重置"
+        return quota
+
+    @staticmethod
+    def format_wait(seconds: float) -> str:
+        """Describe a wait duration in Chinese, for chat output."""
+        if seconds <= 0:
+            return "稍等片刻"
+        if seconds < 60:
+            return f"{seconds:.0f} 秒"
+        minutes = int(seconds // 60) + (1 if seconds % 60 else 0)
+        if minutes < 60:
+            return f"{minutes} 分钟"
+        hours = minutes // 60
+        minutes = minutes % 60
+        return f"{hours} 小时 {minutes} 分钟" if minutes else f"{hours} 小时"
 
     @staticmethod
     def _state_key(scope: str, result: AccountCheckResult) -> str:
@@ -408,6 +536,8 @@ class ContributionService:
         if summary.latest_activity:
             latest = summary.latest_activity
             lines.insert(4, f"- 最近活动：{latest.event_type} / {latest.repository or '未知仓库'}")
+        if result.stale:
+            lines.append("- 数据来源：本地缓存（GitHub 暂时不可用或额度已用尽，可能不是最新）。")
         lines.append(f"引用本条消息并发送 /github_watch detail 可查看 @{username} 的活动详情。")
         return "\n".join(lines)
 
@@ -418,6 +548,7 @@ class ContributionService:
         username: str,
         label: str,
         limit: int,
+        stale: bool = False,
     ) -> list[str]:
         """Render the newest ``limit`` activities as forward-message blocks.
 
@@ -433,6 +564,11 @@ class ContributionService:
             f"生成时间：{self._format_local(now)}",
             "数据来源：GitHub 公开 Events API（仅公开事件，最多可回溯约 90 天）",
         ]
+        if stale:
+            header.append("注意：本次使用本地缓存（GitHub 暂时不可用或额度已用尽），内容可能不是最新。")
+        quota = self.format_quota()
+        if quota:
+            header.append(quota)
         blocks = ["\n".join(header)]
         blocks.extend(
             self.describe_activity(index, activity, now)
@@ -555,5 +691,7 @@ class ContributionService:
             lines.append(f"- 无公开活动：{'、'.join(report.silent_members)}")
         if report.failures:
             lines.append(f"- 查询失败：{'；'.join(report.failures)}")
+        if any(item.stale for item in report.contributions):
+            lines.append("- 注意：部分数据来自本地缓存（GitHub 暂时不可用或额度已用尽），可能不是最新。")
         lines.append(f"共 {report.member_count} 位绑定成员，{len(report.contributions)} 位有贡献。")
         return "\n".join(lines)
