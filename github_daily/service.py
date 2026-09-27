@@ -118,6 +118,7 @@ class ContributionService:
     USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9-]{1,39}$")
 
     def __init__(self, config: PluginConfig, loader: PersistLoader, saver: PersistSaver) -> None:
+        """Initialize service dependencies and per-user request coordination."""
         self.config = config
         self._loader = loader
         self._saver = saver

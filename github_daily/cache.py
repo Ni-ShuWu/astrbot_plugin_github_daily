@@ -27,6 +27,8 @@ DEFAULT_STALE_SECONDS = 1800
 
 @dataclass(slots=True)
 class _Entry(Generic[T]):
+    """Store one cached value and its fresh/stale timing metadata."""
+
     value: T
     expires_at: float
     stored_at: float
@@ -42,6 +44,7 @@ class ActivityCache(Generic[T]):
         max_entries: int = DEFAULT_MAX_ENTRIES,
         stale_seconds: int = DEFAULT_STALE_SECONDS,
     ) -> None:
+        """Create a bounded cache with fresh, stale and cooldown windows."""
         self._ttl_seconds = max(0, ttl_seconds)
         self._cooldown_seconds = max(0, cooldown_seconds)
         self._max_entries = max(1, max_entries)

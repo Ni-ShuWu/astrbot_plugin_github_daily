@@ -15,6 +15,7 @@ class GitHubApiError(GitHubDailyError):
         status_code: int | None = None,
         retry_after_seconds: float | None = None,
     ) -> None:
+        """Capture a user-facing message and optional retry metadata."""
         super().__init__(message)
         self.status_code = status_code
         self.retry_after_seconds = retry_after_seconds
