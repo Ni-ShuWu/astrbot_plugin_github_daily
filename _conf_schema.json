@@ -89,5 +89,10 @@
     "type": "bool",
     "description": "detail 结果使用合并转发消息发送（关闭后改为普通文本）",
     "default": true
+  },
+  "random_conclusion": {
+    "type": "bool",
+    "description": "结论语句随机轮换（关闭时固定为默认的结论文案）",
+    "default": false
   }
 }

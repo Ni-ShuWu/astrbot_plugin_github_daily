@@ -92,6 +92,7 @@ class PluginConfig:
     detail_default_entries: int = 1
     detail_max_entries: int = 20
     detail_use_forward: bool = True
+    random_conclusion: bool = False
 
     def is_group_allowed(self, group_id: str | None) -> bool:
         """Return whether a group is included in the configured whitelist."""
@@ -122,6 +123,7 @@ class PluginConfig:
             detail_default_entries=_as_int(values.get("detail_default_entries"), 1, minimum=1),
             detail_max_entries=_as_int(values.get("detail_max_entries"), 20, minimum=1),
             detail_use_forward=_as_bool(values.get("detail_use_forward"), True),
+            random_conclusion=_as_bool(values.get("random_conclusion"), False),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -145,4 +147,5 @@ class PluginConfig:
             "detail_default_entries": self.detail_default_entries,
             "detail_max_entries": self.detail_max_entries,
             "detail_use_forward": self.detail_use_forward,
+            "random_conclusion": self.random_conclusion,
         }
