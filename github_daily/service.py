@@ -6,18 +6,88 @@ import hashlib
 import re
 import unicodedata
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Iterable, Sequence
 
 from .cache import ActivityCache
 from .classifier import classify_summary, filter_by_repository, summarize_activities
 from .config import PluginConfig
 from .errors import AccountNotFoundError, InvalidAccountError, PermissionDeniedError
 from .github_adapter import GitHubAdapter
-from .models import AccountCheckResult, RepoContributionReport, RepositoryRef, WatchedAccount, WatchState
+from .models import (
+    AccountCheckResult,
+    GitHubActivity,
+    RepoContributionReport,
+    RepositoryRef,
+    WatchedAccount,
+    WatchState,
+)
 
 PluginData = dict[str, Any]
 PersistLoader = Callable[[], Awaitable[PluginData]]
 PersistSaver = Callable[[PluginData], Awaitable[None]]
+
+#: Human-readable names for the event types rendered by ``detail``.
+DETAIL_EVENT_LABELS = {
+    "PushEvent": "推送提交",
+    "CreateEvent": "创建分支/标签",
+    "DeleteEvent": "删除分支/标签",
+    "PullRequestEvent": "Pull Request",
+    "PullRequestReviewEvent": "PR 代码审查",
+    "PullRequestReviewCommentEvent": "PR 审查评论",
+    "PullRequestReviewThreadEvent": "PR 审查线程",
+    "PullRequestReviewThread": "PR 审查线程",
+    "IssuesEvent": "Issue",
+    "IssueCommentEvent": "Issue 评论",
+    "CommitCommentEvent": "提交评论",
+    "ReleaseEvent": "发布 Release",
+    "ForkEvent": "Fork 仓库",
+    "WatchEvent": "Star 仓库",
+    "PublicEvent": "仓库转为公开",
+    "MemberEvent": "成员变动",
+    "GollumEvent": "编辑 Wiki",
+    "SponsorshipEvent": "赞助",
+}
+
+#: Chinese verbs for the ``payload.action`` values GitHub reports.
+DETAIL_ACTION_LABELS = {
+    "opened": "打开",
+    "closed": "关闭",
+    "reopened": "重新打开",
+    "created": "创建",
+    "deleted": "删除",
+    "edited": "编辑",
+    "published": "发布",
+    "updated": "更新",
+    "started": "Star",
+    "added": "添加",
+    "removed": "移除",
+    "merged": "合并",
+    "submitted": "提交",
+    "dismissed": "驳回",
+    "assigned": "指派",
+    "unassigned": "取消指派",
+    "labeled": "加标签",
+    "unlabeled": "去标签",
+    "pinned": "置顶",
+    "unpinned": "取消置顶",
+    "locked": "锁定",
+    "unlocked": "解锁",
+    "transferred": "转移",
+    "milestoned": "关联里程碑",
+    "demilestoned": "取消里程碑",
+    "review_requested": "请求审查",
+    "review_request_removed": "撤回审查请求",
+    "ready_for_review": "标记可审查",
+    "converted_to_draft": "转为草稿",
+    "synchronize": "同步提交",
+}
+
+DETAIL_REF_TYPE_LABELS = {"branch": "分支", "tag": "标签", "repository": "仓库"}
+
+#: ``(@name)`` is emitted by ``format_result`` and ``format_repo_report``, so a
+#: quoted broadcast tells us which account the reply is about.
+QUOTED_USERNAME_PATTERN = re.compile(r"\(@([A-Za-z0-9-]{1,39})\)")
+MENTION_PATTERN = re.compile(r"(?<![\w@])@([A-Za-z0-9][A-Za-z0-9-]{0,38})")
 
 
 def _rebind_denied_text(account: WatchedAccount) -> str:
@@ -120,10 +190,33 @@ class ContributionService:
         data = await self._loader()
         return [WatchedAccount.from_dict(item) for item in data.get(scope, [])]
 
+    async def find_account(self, scope: str, username: str) -> WatchedAccount | None:
+        """Return the watched account matching a username, ignoring case."""
+        target = str(username or "").strip().lower()
+        if not target:
+            return None
+        for account in await self.list_accounts(scope):
+            if account.username.lower() == target:
+                return account
+        return None
+
+    async def fetch_activities(self, username: str) -> list[GitHubActivity]:
+        """Fetch a user's public events, newest first, without a time window.
+
+        ``detail`` deliberately ignores ``window_hours``: it promises the newest
+        public activity, which must still be shown when it is older than the
+        configured check window. GitHub itself keeps only about 90 days of
+        public events.
+        """
+        normalized = str(username or "").strip()
+        if not self.USERNAME_PATTERN.fullmatch(normalized):
+            raise InvalidAccountError("GitHub 用户名格式无效")
+        activities = await self._get_events(normalized)
+        return sorted(activities, key=lambda item: item.created_at, reverse=True)
+
     async def check_account(self, scope: str, username: str) -> AccountCheckResult:
         """Check one configured account and persist its latest state."""
-        accounts = await self.list_accounts(scope)
-        account = next((item for item in accounts if item.username.lower() == username.lower()), None)
+        account = await self.find_account(scope, username)
         if account is None:
             raise AccountNotFoundError(f"未配置 GitHub 账户：{username}")
         activities = await self._get_events(account.username)
@@ -291,20 +384,160 @@ class ContributionService:
         await self._saver(data)
 
     def format_result(self, result: AccountCheckResult) -> str:
-        """Format a check result as a concise Chinese chat message."""
+        """Format a check result as a concise Chinese chat message.
+
+        The ``(@username)`` marker is what lets ``detail`` resolve a quoted
+        announcement back to the account it talks about.
+        """
         summary = result.summary
         label = result.account.label
+        username = result.account.username
         if result.status == "coding":
             conclusion = "不是摸鱼，正在写代码。"
         elif result.status == "active":
             conclusion = "有 GitHub 活动，但暂时不能确认在写代码。"
         else:
             conclusion = "最近没有检测到公开活动，疑似摸鱼。"
-        lines = [f"{label} 最近 {result.window_hours} 小时 GitHub 状态：", f"- 活动总数：{summary.total_count}", f"- 代码相关活动：{summary.code_count}", f"- 普通活动：{summary.ordinary_count}", f"结论：{conclusion}"]
+        lines = [
+            f"{label} (@{username}) 最近 {result.window_hours} 小时 GitHub 状态：",
+            f"- 活动总数：{summary.total_count}",
+            f"- 代码相关活动：{summary.code_count}",
+            f"- 普通活动：{summary.ordinary_count}",
+            f"结论：{conclusion}",
+        ]
         if summary.latest_activity:
             latest = summary.latest_activity
             lines.insert(4, f"- 最近活动：{latest.event_type} / {latest.repository or '未知仓库'}")
+        lines.append(f"引用本条消息并发送 /github_watch detail 可查看 @{username} 的活动详情。")
         return "\n".join(lines)
+
+    def build_detail(
+        self,
+        activities: Sequence[GitHubActivity],
+        *,
+        username: str,
+        label: str,
+        limit: int,
+    ) -> list[str]:
+        """Render the newest ``limit`` activities as forward-message blocks.
+
+        The first block describes the query and every following block describes
+        one activity. Staying platform independent here lets ``main.py`` turn
+        the blocks into a merged forward message, or fall back to plain text.
+        """
+        selected = list(activities)[: max(1, limit)]
+        now = datetime.now(timezone.utc)
+        header = [
+            f"GitHub 活动详情 · {label} (@{username})",
+            f"显示最近 {len(selected)} 条，共 {len(activities)} 条可查",
+            f"生成时间：{self._format_local(now)}",
+            "数据来源：GitHub 公开 Events API（仅公开事件，最多可回溯约 90 天）",
+        ]
+        blocks = ["\n".join(header)]
+        blocks.extend(
+            self.describe_activity(index, activity, now)
+            for index, activity in enumerate(selected, start=1)
+        )
+        return blocks
+
+    def describe_activity(
+        self,
+        index: int,
+        activity: GitHubActivity,
+        now: datetime | None = None,
+    ) -> str:
+        """Render one GitHub activity as a multi-line detail block."""
+        current = now or datetime.now(timezone.utc)
+        headline: list[str] = []
+        if activity.action:
+            headline.append(DETAIL_ACTION_LABELS.get(activity.action, activity.action))
+        headline.append(DETAIL_EVENT_LABELS.get(activity.event_type, activity.event_type))
+        if activity.number:
+            headline.append(f"#{activity.number}")
+        lines = [
+            f"#{index} {' '.join(headline)}",
+            f"仓库：{activity.repository or '未知仓库'}",
+            f"时间：{self._format_local(activity.created_at)}（{self._format_relative(activity.created_at, current)}）",
+        ]
+        if activity.title:
+            lines.append(f"标题：{activity.title}")
+        if activity.ref:
+            ref_type = str(activity.ref_type or "")
+            if not ref_type and activity.event_type == "PushEvent":
+                ref_type = "branch"  # Results persisted by older versions.
+            lines.append(f"{DETAIL_REF_TYPE_LABELS.get(ref_type, '引用')}：{self._short_ref(activity.ref)}")
+        if activity.event_type == "PushEvent":
+            lines.append(f"提交数：{activity.commit_count}")
+        if activity.commits:
+            lines.append("提交信息：")
+            lines.extend(f"  · {message}" for message in activity.commits)
+        elif activity.message:
+            lines.append(f"提交信息：{activity.message}")
+        if activity.url:
+            lines.append(f"链接：{activity.url}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def username_from_text(text: str, accounts: Iterable[WatchedAccount] = ()) -> str:
+        """Guess which GitHub account a quoted chat message talks about.
+
+        ``(@name)`` wins because the plugin writes it into every broadcast, then
+        a bound account's display name, and finally a bare ``@name`` mention —
+        but only in text that looks like this plugin's own output.
+        """
+        blob = str(text or "").strip()
+        if not blob:
+            return ""
+        match = QUOTED_USERNAME_PATTERN.search(blob)
+        if match:
+            return match.group(1)
+        for account in sorted(accounts, key=lambda item: len(item.label), reverse=True):
+            if account.label and account.label in blob:
+                return account.username
+        if "github" in blob.lower():
+            match = MENTION_PATTERN.search(blob)
+            if match:
+                return match.group(1)
+        return ""
+
+    @staticmethod
+    def _short_ref(value: str) -> str:
+        """Strip the ``refs/heads/`` / ``refs/tags/`` prefix from a git ref."""
+        text = str(value or "").strip()
+        for prefix in ("refs/heads/", "refs/tags/"):
+            if text.startswith(prefix):
+                return text[len(prefix):]
+        return text
+
+    @staticmethod
+    def _format_local(value: datetime) -> str:
+        """Render a UTC timestamp in the host's local timezone."""
+        local = value.astimezone()
+        stamp = local.strftime("%Y-%m-%d %H:%M:%S")
+        offset = local.utcoffset()
+        if offset is None:
+            return stamp
+        seconds = int(offset.total_seconds())
+        sign = "+" if seconds >= 0 else "-"
+        seconds = abs(seconds)
+        return f"{stamp} (UTC{sign}{seconds // 3600:02d}:{seconds % 3600 // 60:02d})"
+
+    @staticmethod
+    def _format_relative(value: datetime, now: datetime) -> str:
+        """Describe how long ago an activity happened, in Chinese."""
+        seconds = max(0, int((now - value).total_seconds()))
+        if seconds < 60:
+            return "刚刚"
+        minutes = seconds // 60
+        if minutes < 60:
+            return f"{minutes} 分钟前"
+        hours = minutes // 60
+        if hours < 24:
+            return f"{hours} 小时前"
+        days = hours // 24
+        if days < 30:
+            return f"{days} 天前"
+        return f"{days // 30} 个月前"
 
     def format_repo_report(self, report: RepoContributionReport) -> str:
         """Format a repository contribution report as a Chinese chat message."""

@@ -1,6 +1,6 @@
 # astrbot_plugin_github_daily
 
-一个用于 AstrBot 群聊的 GitHub 代码活动监督插件：绑定群友的 GitHub 用户名后，查询其最近公开活动，并判断是“正在写代码”“有活动但无法确认”还是“疑似摸鱼”。命令支持 `/github_watch` 和简写 `/ghw`，两者完全等价；子命令也支持简写：`add/a`、`remove/rm`、`list/ls`、`check/c`、`repo/r`、`help/h`。
+一个用于 AstrBot 群聊的 GitHub 代码活动监督插件：绑定群友的 GitHub 用户名后，查询其最近公开活动，并判断是“正在写代码”“有活动但无法确认”还是“疑似摸鱼”。命令支持 `/github_watch` 和简写 `/ghw`，两者完全等价；子命令也支持简写：`add/a`、`remove/rm`、`list/ls`、`check/c`、`detail/d`、`repo/r`、`help/h`。
 
 ## 功能
 
@@ -8,6 +8,7 @@
 - `/github_watch remove <用户名>` 解绑自己的账户
 - `/github_watch list` 查看当前群账户
 - `/github_watch check [用户名]` 检查最近活动
+- `/github_watch detail <用户名> [条数]` 查看指定用户最新活动的详情（默认合并转发）
 - `/github_watch repo <owner/repo>` 查看绑定成员在该仓库的贡献
 - `/github_watch help` 查看帮助
 - 可选定时自动检查与主动播报（默认关闭）
@@ -42,17 +43,17 @@ pip install -r requirements.txt
 | 绑定自己的账户 | 允许 | 允许 |
 | 解绑自己的账户 | 允许 | 允许 |
 | 重新绑定已有他人账户 | 拒绝 | 允许 |
-| `list` / `check` / `status` / `repo` | 由 `allow_public_query` 控制 | 允许 |
+| `list` / `check` / `status` / `detail` / `repo` | 由 `allow_public_query` 控制 | 允许 |
 
 两个开关：
 
 | 配置项 | 默认值 | 说明 |
 | --- | --- | --- |
 | `allow_self_bind` | `true` | 关闭后，绑定与解绑都只允许管理员操作 |
-| `allow_public_query` | `true` | 关闭后，`list`、`check` 和 `repo` 只允许管理员使用 |
+| `allow_public_query` | `true` | 关闭后，`list`、`check`、`detail` 和 `repo` 只允许管理员使用 |
 | `max_accounts_per_scope` | `20` | 每个群允许绑定的 GitHub 账户上限，达到上限后需先解绑账户 |
 
-`check` 和 `repo` 会实际请求 GitHub API 并消耗限额，如果群内查询频繁，可以关闭 `allow_public_query`，只让管理员查询。每群绑定上限用于限制自助绑定规模，减少查询带来的 API 请求量。
+`check`、`detail` 和 `repo` 会实际请求 GitHub API 并消耗限额，如果群内查询频繁，可以关闭 `allow_public_query`，只让管理员查询。每群绑定上限用于限制自助绑定规模，减少查询带来的 API 请求量。
 
 昵称会剥离控制字符并截断至 64 个字符。
 
@@ -73,6 +74,29 @@ pip install -r requirements.txt
 - 只统计绑定成员的公开事件，匹配仓库名时不区分大小写；代码活动与普通活动的划分沿用 `code_event_types`。
 - 结果按代码活动数排序，无贡献的成员单独列在“无公开活动”之后；某个成员拉取失败只显示为一行的“查询失败”，不影响其他成员。
 - 查询复用与 `check` 相同的缓存和冷却，因此刚查过 `check` 时不会重复请求 GitHub API。
+
+## 活动详情查询
+
+`/github_watch detail <GitHub用户名> [条数]` 展示指定用户**最新的公开活动详情**。不写条数时只看最新 1 条，写了条数就按条数展示最近若干条：
+
+```text
+/github_watch detail Ni-ShuWu      # 最新 1 条
+/ghw d Ni-ShuWu 5                  # 最新 5 条
+/ghw detail 5                      # 引用一条播报消息时，看该账户最新 5 条
+```
+
+- 结果默认以**合并转发**消息发送，一条活动一个节点，避免刷屏。只有 OneBot 系适配器（`aiocqhttp`、`satori`）能渲染合并转发，其他平台会自动退回普通文本；把 `detail_use_forward` 设为 `false` 可以强制使用普通文本。
+- 每条活动会尽量还原该事件的上下文：事件类型（中文说明）、仓库、时间（本地时区与相对时间）、分支/标签、提交数与提交信息、Issue/PR 标题与编号、跳转链接。
+- 用户名既可以是本群已绑定的账户，也可以是任意 GitHub 用户名；命中已绑定账户时显示其昵称，也可以直接用昵称代替用户名。
+- 也可以**引用一条定时播报（或 `/github_watch check`）的消息**，再发送 `/github_watch detail [条数]`，插件会从被引用的消息里解析出 `(@用户名)` 并展示该账户的详情。
+- `detail` 不受 `window_hours` 限制：它展示的是最新公开事件，即使该事件早于检查窗口（GitHub 公开 Events API 最多可回溯约 90 天）。
+- 权限由 `allow_public_query` 控制，缓存与请求冷却和 `check` 共用，因此刚查过 `check` 时不会重复请求 GitHub API。
+
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `detail_default_entries` | `1` | `detail` 不写条数时默认展示的活动条数 |
+| `detail_max_entries` | `20` | `detail` 单次最多允许展示的活动条数 |
+| `detail_use_forward` | `true` | `detail` 结果使用合并转发消息发送 |
 
 ## 自动播报
 

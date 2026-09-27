@@ -62,7 +62,7 @@
   },
   "allow_public_query": {
     "type": "bool",
-    "description": "允许非管理员使用 list、check 和 repo 查询贡献状态",
+    "description": "允许非管理员使用 list、check、detail 和 repo 查询贡献状态",
     "default": true
   },
   "allowed_group_ids": {
@@ -74,5 +74,20 @@
     "type": "int",
     "description": "每个群允许绑定的 GitHub 账户上限",
     "default": 20
+  },
+  "detail_default_entries": {
+    "type": "int",
+    "description": "detail 不写条数时默认展示的活动条数",
+    "default": 1
+  },
+  "detail_max_entries": {
+    "type": "int",
+    "description": "detail 单次最多允许展示的活动条数",
+    "default": 20
+  },
+  "detail_use_forward": {
+    "type": "bool",
+    "description": "detail 结果使用合并转发消息发送（关闭后改为普通文本）",
+    "default": true
   }
 }
