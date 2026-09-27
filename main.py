@@ -12,7 +12,72 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star
 
-__version__ = "1.4.1"
+try:  # Merged forward messages ("合并转发") exist since AstrBot 4.9.2.
+    from astrbot.api.message_components import Node, Nodes, Plain, Reply
+except ImportError:  # pragma: no cover - only for unusually old AstrBot builds
+    Node = Nodes = Plain = Reply = None  # type: ignore[assignment]
+
+__version__ = "1.5.0"
+
+#: AstrBot platforms whose adapters understand merged forward ("Nodes") messages.
+FORWARD_CAPABLE_PLATFORMS = frozenset({"aiocqhttp", "satori"})
+
+DETAIL_USAGE = (
+    "用法：/github_watch detail <GitHub用户名> [条数]，"
+    "或者引用一条 GitHub 播报消息后发送 /github_watch detail [条数]。"
+)
+
+
+def _collect_text(component: Any, depth: int = 0) -> list[str]:
+    """Flatten the text a message component carries, following nested nodes."""
+    if depth > 4:
+        return []
+    texts: list[str] = []
+    for attribute in ("text", "message_str"):
+        value = getattr(component, attribute, None)
+        if isinstance(value, str) and value.strip():
+            texts.append(value)
+    for attribute in ("content", "nodes"):
+        children = getattr(component, attribute, None)
+        if isinstance(children, (list, tuple)):
+            for child in children:
+                texts.extend(_collect_text(child, depth + 1))
+    return texts
+
+
+def _quoted_text(event: AstrMessageEvent) -> str:
+    """Return the text of the message this event replies to, when available.
+
+    AstrBot fetches the referenced message and fills ``Reply.message_str`` and
+    ``Reply.chain`` for OneBot platforms, which is what makes "reply to the
+    scheduled broadcast to see its detail" work.
+    """
+    if Reply is None:
+        return ""
+    parts: list[str] = []
+    for component in event.get_messages():
+        if isinstance(component, Reply):
+            parts.extend(_collect_text(component))
+    cleaned = [part.strip() for part in parts if part.strip()]
+    return "\n".join(dict.fromkeys(cleaned))
+
+
+def _forward_result(event: AstrMessageEvent, blocks: list[str]) -> Any | None:
+    """Wrap text blocks into one merged forward message, or return ``None``.
+
+    Only the OneBot-compatible adapters (``aiocqhttp`` and ``satori``) can render
+    an AstrBot ``Nodes`` chain; every other platform falls back to plain text so
+    the command still answers instead of sending something unreadable.
+    """
+    if Nodes is None or Node is None or Plain is None:
+        return None
+    get_platform_name = getattr(event, "get_platform_name", None)
+    platform = str(get_platform_name() or "").strip().lower() if callable(get_platform_name) else ""
+    if platform not in FORWARD_CAPABLE_PLATFORMS:
+        return None
+    self_id = str(event.get_self_id() or "").strip() or "0"
+    nodes = [Node([Plain(block)], name="GitHub Daily", uin=self_id) for block in blocks]
+    return event.chain_result([Nodes(nodes)])
 
 
 def _import_bundled_modules() -> tuple[type, type, type, type]:
@@ -70,7 +135,7 @@ class GithubDailyPlugin(Star):
 
     @filter.command("github_watch", alias={"ghw"})
     async def github_watch(self, event: AstrMessageEvent, action: str = "help", target: str = "", extra: str = ""):
-        """管理 GitHub 监督：add/remove/list/check/repo/status/help。"""
+        """管理 GitHub 监督：add/remove/list/check/repo/detail/status/help。"""
         group_id = str(event.get_group_id() or "").strip()
         if not self._config.is_group_allowed(group_id):
             yield event.plain_result("当前群聊不在 GitHub 监督白名单内。")
@@ -84,6 +149,7 @@ class GithubDailyPlugin(Star):
             "c": "check",
             "s": "status",
             "r": "repo",
+            "d": "detail",
             "h": "help",
         }.get(action, action)
         is_admin = event.is_admin()
@@ -138,6 +204,43 @@ class GithubDailyPlugin(Star):
                 targets = [target] if target else [item.username for item in accounts]
                 results = [await self._service.check_account(scope, item) for item in targets]
                 yield event.plain_result("\n\n".join(self._service.format_result(item) for item in results))
+            elif action == "detail":
+                tokens = [item for item in (target, extra) if item]
+                username = next((item for item in tokens if not item.isdigit()), "")
+                limit = next(
+                    (int(item) for item in tokens if item.isdigit()),
+                    self._config.detail_default_entries,
+                )
+                accounts = await self._service.list_accounts(scope)
+                if not username:
+                    # No explicit name: fall back to the quoted announcement.
+                    username = self._service.username_from_text(_quoted_text(event), accounts)
+                if not username:
+                    yield event.plain_result(DETAIL_USAGE)
+                    return
+                account = next(
+                    (item for item in accounts if item.username.lower() == username.lower()),
+                    None,
+                )
+                if account is None:  # Allow referring to a binding by its nickname.
+                    account = next((item for item in accounts if item.label == username), None)
+                if account is not None:
+                    username = account.username
+                label = account.label if account is not None else username
+                limit = max(1, min(limit, self._config.detail_max_entries))
+                activities, stale = await self._service.fetch_activities(username)
+                if not activities:
+                    yield event.plain_result(f"{label} (@{username}) 目前没有公开活动记录。")
+                    return
+                blocks = self._service.build_detail(
+                    activities,
+                    username=username,
+                    label=label,
+                    limit=limit,
+                    stale=stale,
+                )
+                forward = _forward_result(event, blocks) if self._config.detail_use_forward else None
+                yield forward if forward is not None else event.plain_result("\n\n".join(blocks))
             else:
                 yield event.plain_result(self._help_text())
         except PermissionDeniedError as exc:
@@ -171,6 +274,15 @@ class GithubDailyPlugin(Star):
     async def _run_auto_check(self) -> None:
         """Check every eligible scope once and push the results that matter."""
         targets = await self._service.auto_check_targets(self._config.is_group_allowed)
+        budget_wait = self._service.rate_limit_wait_seconds()
+        if budget_wait > 0:
+            # Every account in every scope would be rejected right now, so skip
+            # the whole round instead of spending it on guaranteed failures.
+            logger.warning(
+                "github_daily: 跳过本轮自动检查，GitHub 额度已用尽，预计 %s 后恢复",
+                self._service.format_wait(budget_wait),
+            )
+            return
         for scope, umo in targets:
             results, failures = await self._service.check_all(scope)
             for failure in failures:
@@ -208,7 +320,7 @@ class GithubDailyPlugin(Star):
             return True
         if action in {"add", "remove"}:
             return self._config.allow_self_bind
-        if action in {"check", "status", "list", "repo"}:
+        if action in {"check", "status", "list", "repo", "detail"}:
             return self._config.allow_public_query
         return True  # help and unknown actions only print usage.
 
@@ -217,7 +329,7 @@ class GithubDailyPlugin(Star):
         """Explain why a non-admin action was refused."""
         if action in {"add", "remove"}:
             return "当前配置不允许自助绑定 GitHub 账户，请联系管理员操作。"
-        if action in {"check", "status", "repo"}:
+        if action in {"check", "status", "repo", "detail"}:
             return "当前配置仅允许管理员查询 GitHub 状态。"
         if action == "list":
             return "当前配置仅允许管理员查看监督列表。"
@@ -232,6 +344,8 @@ class GithubDailyPlugin(Star):
             "/github_watch remove/rm <用户名> - 解绑（本人或管理员）",
             "/github_watch list/ls - 查看监督账户",
             "/github_watch check/status/c/s [用户名] - 检查贡献状态",
+            "/github_watch detail/d <用户名> [条数] - 查看指定用户最新活动的详情（默认 1 条，合并转发）",
             "/github_watch repo/r <owner/repo> - 查看绑定成员在该仓库的贡献",
             "/github_watch help/h - 查看帮助",
+            "引用一条播报消息后发送 /github_watch detail [条数] 也可以查看该账户的活动详情。",
         ])

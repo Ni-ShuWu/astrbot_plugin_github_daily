@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.5.0
+
+- 新增 `/github_watch detail`（简写 `/ghw detail`、`/ghw d`）：查看指定 GitHub 用户最新的公开活动详情，默认只展示最新 1 条，附带条数即可查看最近多条。
+- `detail` 默认以**合并转发**消息发送，一条活动一个节点；只有 OneBot 系适配器（`aiocqhttp`、`satori`）支持合并转发，其他平台自动退回普通文本。可用 `detail_use_forward` 关闭，改回普通文本。新增 `detail_default_entries`（默认 1）和 `detail_max_entries`（默认 20）配置。
+- 支持**引用定时播报或 `/github_watch check` 的消息**后发送 `/github_watch detail [条数]`：插件从被引用消息中解析 `(@用户名)`，也兼容昵称与 `@用户名` 的兜底匹配。
+- 事件解析新增分支、提交数与提交信息、Issue/PR 标题与编号、release/仓库等信息，`detail` 会逐条渲染这些上下文。
+- `detail` 不受 `window_hours` 限制，始终展示最新的公开事件；权限由 `allow_public_query` 控制，缓存与请求冷却和 `check` 共用。
+- `check` 与自动播报的输出在标题上补充 `(@用户名)`，并提示可引用该消息查看详情，作为 `detail` 引用解析的依据。
+- 用户名参数支持昵称；未绑定的 GitHub 用户名也可以直接查询详情。
+- 降低 GitHub API 消耗并让额度耗尽时优雅降级：同一账户的并发查询合并为一次真实请求（N 次并发只扣 1 次额度）；请求冷却期与 GitHub 报错时改用最近的缓存数据而不是直接报错，避免用户反复重试；记录响应头 `X-RateLimit-*`，额度耗尽时不再发出注定被拒的请求，并告知恢复时间与 `github_token` 方案；缓存改为最近 200 个账户的 LRU，避免 `detail` 查询任意用户名导致内存无上限增长。
+- 定时检查在额度耗尽时整轮跳过并写一条日志，不再逐个账户刷失败。
+- `detail` 头部显示当前剩余额度（如“API 额度：剩余 42/60”），方便群里观察消耗。
+- 明确一点：GitHub 对条件请求返回的 `304 Not Modified` 同样计入限额（实测确认），因此本插件不依赖 ETag 节省额度，而是减少请求本身。
+
 ## 1.4.1 - 2026-09-26
 
 - 为 `/github_watch` 新增简写命令 `/ghw`，并为 `add/remove/list/check/repo/help` 子命令新增 `a/rm/ls/c/r/h` 简写，所有权限和参数行为保持不变。

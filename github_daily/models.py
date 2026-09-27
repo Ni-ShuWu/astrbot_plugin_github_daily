@@ -117,7 +117,14 @@ class WatchedAccount:
 
 @dataclass(slots=True, frozen=True)
 class GitHubActivity:
-    """A normalized event returned by GitHub's public events API."""
+    """A normalized event returned by GitHub's public events API.
+
+    Only the fields the chat output renders are kept, because the raw event
+    payload is far too large to persist inside check results. ``ref``,
+    ``ref_type``, ``commit_count``, ``commits``, ``action``, ``number`` and
+    ``title`` carry the extra context used by ``detail``; they all default to
+    empty values so results persisted by older plugin versions still load.
+    """
 
     event_id: str
     event_type: str
@@ -126,6 +133,13 @@ class GitHubActivity:
     created_at: datetime
     url: str | None = None
     message: str | None = None
+    ref: str | None = None
+    ref_type: str | None = None
+    commit_count: int = 0
+    commits: tuple[str, ...] = ()
+    action: str | None = None
+    number: int | None = None
+    title: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible representation."""
@@ -137,6 +151,13 @@ class GitHubActivity:
             "created_at": _format_datetime(self.created_at),
             "url": self.url,
             "message": self.message,
+            "ref": self.ref,
+            "ref_type": self.ref_type,
+            "commit_count": self.commit_count,
+            "commits": list(self.commits),
+            "action": self.action,
+            "number": self.number,
+            "title": self.title,
         }
 
     @classmethod
@@ -145,6 +166,7 @@ class GitHubActivity:
         created_at = _parse_datetime(data.get("created_at"))
         if created_at is None:
             raise ValueError("activity created_at is required")
+        number = data.get("number")
         return cls(
             event_id=str(data["event_id"]),
             event_type=str(data["event_type"]),
@@ -153,6 +175,13 @@ class GitHubActivity:
             created_at=created_at,
             url=data.get("url"),
             message=data.get("message"),
+            ref=data.get("ref"),
+            ref_type=data.get("ref_type"),
+            commit_count=int(data.get("commit_count") or 0),
+            commits=tuple(str(item) for item in (data.get("commits") or ())),
+            action=data.get("action"),
+            number=int(number) if number is not None else None,
+            title=data.get("title"),
         )
 
 
@@ -191,7 +220,12 @@ class ActivitySummary:
 
 @dataclass(slots=True, frozen=True)
 class AccountCheckResult:
-    """Classification result for one watched account."""
+    """Classification result for one watched account.
+
+    ``stale`` marks a result computed from a cached answer because GitHub could
+    not be queried (spent quota or network failure), so the chat output can say
+    so instead of passing old data off as fresh.
+    """
 
     account: WatchedAccount
     checked_at: datetime
@@ -200,6 +234,7 @@ class AccountCheckResult:
     is_coding: bool
     status: str
     error: str | None = None
+    stale: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible representation."""
@@ -211,6 +246,7 @@ class AccountCheckResult:
             "is_coding": self.is_coding,
             "status": self.status,
             "error": self.error,
+            "stale": self.stale,
         }
 
     @classmethod
@@ -227,6 +263,7 @@ class AccountCheckResult:
             is_coding=bool(data["is_coding"]),
             status=str(data["status"]),
             error=data.get("error"),
+            stale=bool(data.get("stale", False)),
         )
 
 
