@@ -73,7 +73,7 @@ def _forward_result(event: AstrMessageEvent, blocks: list[str]) -> Any | None:
         return None
     get_platform_name = getattr(event, "get_platform_name", None)
     platform = str(get_platform_name() or "").strip().lower() if callable(get_platform_name) else ""
-    if platform and platform not in FORWARD_CAPABLE_PLATFORMS:
+    if platform not in FORWARD_CAPABLE_PLATFORMS:
         return None
     self_id = str(event.get_self_id() or "").strip() or "0"
     nodes = [Node([Plain(block)], name="GitHub Daily", uin=self_id) for block in blocks]

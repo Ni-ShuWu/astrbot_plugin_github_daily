@@ -40,7 +40,7 @@ class GitHubAdapter:
             "User-Agent": "astrbot-plugin-github-daily",
         }
         if self._token:
-            headers["Authorization"] = f"Bearer {self._token}"
+            headers["Authorization"] = "Bearer " + self._token
         url = f"{self.BASE_URL}/users/{username}/events/public"
         for attempt in range(self._max_retries + 1):
             try:

@@ -127,6 +127,7 @@ class ContributionService:
         # One lock per username, so several simultaneous queries about the same
         # account still cost a single GitHub request.
         self._locks: dict[str, asyncio.Lock] = {}
+        self._lock_users: dict[str, int] = {}
         # Remember which exhausted window was already logged, to avoid spam.
         self._budget_warning_reset: datetime | None = None
 
@@ -388,6 +389,7 @@ class ContributionService:
         lock = self._locks.get(key)
         if lock is None:
             lock = self._locks.setdefault(key, asyncio.Lock())
+        self._lock_users[key] = self._lock_users.get(key, 0) + 1
         try:
             async with lock:
                 # A concurrent caller may have filled the cache while we waited.
@@ -424,8 +426,12 @@ class ContributionService:
                 self._cache.set(key, events)
                 return events, False
         finally:
-            if not lock.locked():
+            users = self._lock_users[key] - 1
+            if users == 0:
+                self._lock_users.pop(key, None)
                 self._locks.pop(key, None)
+            else:
+                self._lock_users[key] = users
 
     def _budget_is_spent(self) -> bool:
         """Return whether GitHub's advertised budget forbids another request."""
