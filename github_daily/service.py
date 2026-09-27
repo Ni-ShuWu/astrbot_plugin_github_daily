@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import logging
 import re
 import unicodedata
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Iterable, Sequence
+
+from astrbot.api import logger
 
 from .cache import ActivityCache
 from .classifier import classify_summary, filter_by_repository, summarize_activities
@@ -24,8 +25,6 @@ from .models import (
     WatchState,
 )
 from .rate_limit import RateLimitState
-
-logger = logging.getLogger(__name__)
 
 PluginData = dict[str, Any]
 PersistLoader = Callable[[], Awaitable[PluginData]]
