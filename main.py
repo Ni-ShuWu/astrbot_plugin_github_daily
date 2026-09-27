@@ -17,10 +17,24 @@ try:  # Merged forward messages ("合并转发") exist since AstrBot 4.9.2.
 except ImportError:  # pragma: no cover - only for unusually old AstrBot builds
     Node = Nodes = Plain = Reply = None  # type: ignore[assignment]
 
-__version__ = "1.5.0"
+__version__ = "1.5.1"
 
 #: AstrBot platforms whose adapters understand merged forward ("Nodes") messages.
 FORWARD_CAPABLE_PLATFORMS = frozenset({"aiocqhttp", "satori"})
+
+#: Canonical command names keyed by their user-facing shorthand.
+ACTION_ALIASES = {
+    "a": "add",
+    "rm": "remove",
+    "ls": "list",
+    "c": "check",
+    "s": "status",
+    "r": "repo",
+    "d": "detail",
+    "h": "help",
+}
+SELF_MANAGED_ACTIONS = frozenset({"add", "remove"})
+PUBLIC_QUERY_ACTIONS = frozenset({"check", "status", "list", "repo", "detail"})
 
 DETAIL_USAGE = (
     "用法：/github_watch detail <GitHub用户名> [条数]，"
@@ -121,6 +135,7 @@ class GithubDailyPlugin(Star):
     """Monitor configured GitHub accounts in AstrBot chat scopes."""
 
     def __init__(self, context: Context, config: dict[str, Any] | None = None) -> None:
+        """Initialize configuration, persistence service and optional monitor."""
         super().__init__(context)
         raw_config = dict(config or {})
         self._config = PluginConfig.from_mapping(raw_config)
@@ -142,16 +157,7 @@ class GithubDailyPlugin(Star):
             return
         scope = group_id
         action = action.lower().strip()
-        action = {
-            "a": "add",
-            "rm": "remove",
-            "ls": "list",
-            "c": "check",
-            "s": "status",
-            "r": "repo",
-            "d": "detail",
-            "h": "help",
-        }.get(action, action)
+        action = ACTION_ALIASES.get(action, action)
         is_admin = event.is_admin()
         try:
             if not self._is_action_allowed(action, is_admin):
@@ -318,9 +324,9 @@ class GithubDailyPlugin(Star):
         """Return whether the sender may run an action under the current config."""
         if is_admin:
             return True
-        if action in {"add", "remove"}:
+        if action in SELF_MANAGED_ACTIONS:
             return self._config.allow_self_bind
-        if action in {"check", "status", "list", "repo", "detail"}:
+        if action in PUBLIC_QUERY_ACTIONS:
             return self._config.allow_public_query
         return True  # help and unknown actions only print usage.
 

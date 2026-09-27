@@ -70,6 +70,7 @@ class RateLimitTracker:
     """Fold every response's headers into the current budget snapshot."""
 
     def __init__(self) -> None:
+        """Initialize an unknown rate-limit snapshot."""
         self._state = RateLimitState()
 
     @property

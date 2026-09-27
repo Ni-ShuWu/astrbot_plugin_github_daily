@@ -27,6 +27,7 @@ class GitHubAdapter:
     MAX_RETRY_SLEEP_SECONDS = 30.0
 
     def __init__(self, token: str = "", timeout_seconds: float = 10.0, max_retries: int = 2) -> None:
+        """Configure authentication, request timeout and retry behavior."""
         self._token = token.strip()
         self._timeout = max(1.0, timeout_seconds)
         self._max_retries = max(0, max_retries)
