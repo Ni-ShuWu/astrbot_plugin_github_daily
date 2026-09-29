@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import unicodedata
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
+
+from .conclusions import DEFAULT_CONCLUSIONS, ROTATING_CONCLUSIONS
 
 DEFAULT_CODE_EVENT_TYPES = (
     "PushEvent",
@@ -11,6 +15,47 @@ DEFAULT_CODE_EVENT_TYPES = (
     "PullRequestReviewEvent",
 )
 OPTIONAL_CODE_EVENT_TYPES = ("CreateEvent", "ReleaseEvent")
+
+
+def _default_conclusion_sentences() -> dict[str, dict[str, str]]:
+    """Build editable defaults while reserving the default key for fixed mode."""
+    result: dict[str, dict[str, str]] = {}
+    for status, pool in ROTATING_CONCLUSIONS.items():
+        entries = {"default": pool[0]}
+        entries.update(
+            (f"sentence_{index:02d}", sentence)
+            for index, sentence in enumerate(pool[1:], start=2)
+        )
+        result[status] = entries
+    return result
+
+
+def _normalize_conclusion_sentence(value: str) -> str:
+    """Keep custom conclusion text on one printable line."""
+    text = "".join(
+        " " if char.isspace() or unicodedata.category(char) == "Cc" else char
+        for char in value
+    )
+    return " ".join(text.split())
+
+
+def _as_conclusion_entries(value: Any, status: str) -> dict[str, str]:
+    """Accept only non-empty, unique string values from a status dictionary."""
+    if not isinstance(value, Mapping):
+        return dict(_default_conclusion_sentences()[status])
+
+    entries: dict[str, str] = {}
+    seen: set[str] = set()
+    for key, raw_sentence in value.items():
+        if not isinstance(key, str) or not isinstance(raw_sentence, str):
+            continue
+        normalized_key = key.strip()
+        sentence = _normalize_conclusion_sentence(raw_sentence)
+        if not normalized_key or not sentence or sentence in seen:
+            continue
+        entries[normalized_key] = sentence
+        seen.add(sentence)
+    return entries
 
 _TRUE_LITERALS = {"1", "true", "yes", "y", "on", "是", "开启", "启用"}
 _FALSE_LITERALS = {"0", "false", "no", "n", "off", "否", "关闭", "禁用"}
@@ -93,17 +138,39 @@ class PluginConfig:
     detail_max_entries: int = 20
     detail_use_forward: bool = True
     random_conclusion: bool = False
+    conclusion_sentences: dict[str, dict[str, str]] = field(
+        default_factory=_default_conclusion_sentences
+    )
 
     def is_group_allowed(self, group_id: str | None) -> bool:
         """Return whether a group is included in the configured whitelist."""
         normalized = str(group_id or "").strip()
         return bool(normalized) and normalized in self.allowed_group_ids
 
+    def conclusion_pool(self, status: str) -> tuple[str, ...]:
+        """Return configured sentences for a known status, preserving order."""
+        normalized_status = status if status in DEFAULT_CONCLUSIONS else "idle"
+        return tuple(self.conclusion_sentences.get(normalized_status, {}).values())
+
+    def fixed_conclusion(self, status: str) -> str:
+        """Return the fixed sentence, falling back safely for an empty pool."""
+        normalized_status = status if status in DEFAULT_CONCLUSIONS else "idle"
+        entries = self.conclusion_sentences.get(normalized_status, {})
+        return entries.get("default") or next(
+            iter(entries.values()), DEFAULT_CONCLUSIONS[normalized_status]
+        )
+
     @classmethod
-    def from_mapping(cls, data: dict[str, Any] | None) -> "PluginConfig":
+    def from_mapping(cls, data: dict[str, Any] | None) -> PluginConfig:
         """Create a validated configuration from AstrBot config data."""
         values = data or {}
         events = _as_string_tuple(values.get("code_event_types")) or DEFAULT_CODE_EVENT_TYPES
+        conclusion_sentences = {
+            status: _as_conclusion_entries(
+                values.get(f"conclusion_{status}_sentences"), status
+            )
+            for status in DEFAULT_CONCLUSIONS
+        }
         return cls(
             window_hours=_as_int(values.get("window_hours"), 24, minimum=1),
             cache_ttl_seconds=_as_int(values.get("cache_ttl_seconds"), 300, minimum=0),
@@ -124,6 +191,7 @@ class PluginConfig:
             detail_max_entries=_as_int(values.get("detail_max_entries"), 20, minimum=1),
             detail_use_forward=_as_bool(values.get("detail_use_forward"), True),
             random_conclusion=_as_bool(values.get("random_conclusion"), False),
+            conclusion_sentences=conclusion_sentences,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -148,4 +216,8 @@ class PluginConfig:
             "detail_max_entries": self.detail_max_entries,
             "detail_use_forward": self.detail_use_forward,
             "random_conclusion": self.random_conclusion,
+            **{
+                f"conclusion_{status}_sentences": dict(entries)
+                for status, entries in self.conclusion_sentences.items()
+            },
         }
