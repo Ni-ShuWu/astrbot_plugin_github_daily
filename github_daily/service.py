@@ -126,9 +126,11 @@ class ContributionService:
         self._saver = saver
         self._adapter = GitHubAdapter(config.github_token, config.request_timeout_seconds, config.max_retries)
         self._cache: ActivityCache = ActivityCache(config.cache_ttl_seconds, config.request_cooldown_seconds)
-        # Rotating conclusion sentences; consulted only while the config switch
-        # is on, so the default output stays byte-for-byte identical.
-        self._conclusions = ConclusionPicker()
+        # The status-specific pools come from plugin settings. Each plugin reload
+        # starts a fresh shuffle bag for the newly saved configuration.
+        self._conclusions = ConclusionPicker(
+            {status: config.conclusion_pool(status) for status in DEFAULT_CONCLUSIONS}
+        )
         # One lock per username, so several simultaneous queries about the same
         # account still cost a single GitHub request.
         self._locks: dict[str, asyncio.Lock] = {}
@@ -552,8 +554,8 @@ class ContributionService:
     def format_result(self, result: AccountCheckResult) -> str:
         """Format a check result as a concise Chinese chat message.
 
-        The conclusion sentence is fixed unless ``random_conclusion`` is on, in
-        which case it is drawn from the pool for the current status. The
+        The fixed sentence is configured per status; when ``random_conclusion``
+        is on, a sentence is drawn from that status's configured pool. The
         ``(@username)`` marker is what lets ``detail`` resolve a quoted
         announcement back to the account it talks about.
         """
@@ -563,7 +565,7 @@ class ContributionService:
         if self.config.random_conclusion:
             conclusion = self._conclusions.pick(result.status)
         else:
-            conclusion = DEFAULT_CONCLUSIONS.get(result.status, DEFAULT_CONCLUSIONS["idle"])
+            conclusion = self.config.fixed_conclusion(result.status)
         lines = [
             f"{label} (@{username}) 最近 {result.window_hours} 小时 GitHub 状态：",
             f"- 活动总数：{summary.total_count}",

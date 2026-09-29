@@ -17,7 +17,7 @@ try:  # Merged forward messages ("合并转发") exist since AstrBot 4.9.2.
 except ImportError:  # pragma: no cover - only for unusually old AstrBot builds
     Node = Nodes = Plain = Reply = None  # type: ignore[assignment]
 
-__version__ = "1.5.2"
+__version__ = "1.6.0"
 
 #: AstrBot platforms whose adapters understand merged forward ("Nodes") messages.
 FORWARD_CAPABLE_PLATFORMS = frozenset({"aiocqhttp", "satori"})
