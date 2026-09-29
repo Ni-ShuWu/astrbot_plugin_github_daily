@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- 修复 GitHub Events API 未返回 `size` / `commits` 时提交数错误显示为 0：改用 Compare API 查询，无法确认时显示“未知”。
+
 ## 1.5.2 - 2026-09-27
 
 - 新增 `random_conclusion` 配置（默认 `false`）：打开后 `check` 与自动播报的结论行会在当前状态对应的语句池里轮换；关闭时固定为原有的三条默认结论，输出与旧版本逐字节一致。

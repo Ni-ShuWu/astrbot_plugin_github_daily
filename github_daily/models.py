@@ -135,7 +135,9 @@ class GitHubActivity:
     message: str | None = None
     ref: str | None = None
     ref_type: str | None = None
-    commit_count: int = 0
+    commit_count: int | None = None
+    before: str | None = None
+    head: str | None = None
     commits: tuple[str, ...] = ()
     action: str | None = None
     number: int | None = None
@@ -154,6 +156,8 @@ class GitHubActivity:
             "ref": self.ref,
             "ref_type": self.ref_type,
             "commit_count": self.commit_count,
+            "before": self.before,
+            "head": self.head,
             "commits": list(self.commits),
             "action": self.action,
             "number": self.number,
@@ -177,7 +181,13 @@ class GitHubActivity:
             message=data.get("message"),
             ref=data.get("ref"),
             ref_type=data.get("ref_type"),
-            commit_count=int(data.get("commit_count") or 0),
+            commit_count=(
+                int(data["commit_count"])
+                if data.get("commit_count") is not None
+                else None
+            ),
+            before=data.get("before"),
+            head=data.get("head"),
             commits=tuple(str(item) for item in (data.get("commits") or ())),
             action=data.get("action"),
             number=int(number) if number is not None else None,

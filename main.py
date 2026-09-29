@@ -234,7 +234,7 @@ class GithubDailyPlugin(Star):
                     username = account.username
                 label = account.label if account is not None else username
                 limit = max(1, min(limit, self._config.detail_max_entries))
-                activities, stale = await self._service.fetch_activities(username)
+                activities, stale = await self._service.fetch_activities(username, detail_limit=limit)
                 if not activities:
                     yield event.plain_result(f"{label} (@{username}) 目前没有公开活动记录。")
                     return

@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import re
 import unicodedata
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Iterable, Sequence
 
@@ -219,7 +220,11 @@ class ContributionService:
                 return account
         return None
 
-    async def fetch_activities(self, username: str) -> tuple[list[GitHubActivity], bool]:
+    async def fetch_activities(
+        self,
+        username: str,
+        detail_limit: int = 1,
+    ) -> tuple[list[GitHubActivity], bool]:
         """Fetch a user's public events, newest first, without a time window.
 
         ``detail`` deliberately ignores ``window_hours``: it promises the newest
@@ -234,7 +239,30 @@ class ContributionService:
         if not self.USERNAME_PATTERN.fullmatch(normalized):
             raise InvalidAccountError("GitHub 用户名格式无效")
         activities, stale = await self._get_events(normalized)
-        return sorted(activities, key=lambda item: item.created_at, reverse=True), stale
+        activities = sorted(activities, key=lambda item: item.created_at, reverse=True)
+        if not stale:
+            limit = max(1, detail_limit)
+            activities = await self._resolve_push_commit_counts(activities[:limit]) + activities[limit:]
+            self._cache.update(normalized.lower(), activities)
+        return activities, stale
+
+    async def _resolve_push_commit_counts(
+        self,
+        activities: Sequence[GitHubActivity],
+    ) -> list[GitHubActivity]:
+        """Fill missing push commit counts using the GitHub compare endpoint."""
+        resolved: list[GitHubActivity] = []
+        for activity in activities:
+            if activity.event_type != "PushEvent" or activity.commit_count is not None:
+                resolved.append(activity)
+                continue
+            count = await self._adapter.fetch_push_commit_count(
+                activity.repository or "",
+                activity.before or "",
+                activity.head or "",
+            )
+            resolved.append(replace(activity, commit_count=count))
+        return resolved
 
     async def check_account(self, scope: str, username: str) -> AccountCheckResult:
         """Check one configured account and persist its latest state."""
@@ -613,7 +641,8 @@ class ContributionService:
                 ref_type = "branch"  # Results persisted by older versions.
             lines.append(f"{DETAIL_REF_TYPE_LABELS.get(ref_type, '引用')}：{self._short_ref(activity.ref)}")
         if activity.event_type == "PushEvent":
-            lines.append(f"提交数：{activity.commit_count}")
+            count = str(activity.commit_count) if activity.commit_count is not None else "未知"
+            lines.append(f"提交数：{count}")
         if activity.commits:
             lines.append("提交信息：")
             lines.extend(f"  · {message}" for message in activity.commits)
