@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+
+- 修复 GitHub Events API 未返回 `size` / `commits` 时提交数错误显示为 0：改用 Compare API 查询，无法确认时显示“未知”。
 ## 1.6.0 - 2026-09-29
 
 - 新增三种状态各自的可编辑结论语句字典，支持在 AstrBot 插件设置中逐条新增、修改和删除。

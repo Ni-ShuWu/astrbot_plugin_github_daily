@@ -91,6 +91,15 @@ class ActivityCache(Generic[T]):
         self._entries.move_to_end(key)
         self._evict()
 
+    def update(self, key: str, value: T) -> bool:
+        """Replace a cached value without extending its expiration window."""
+        entry = self._entries.get(key)
+        if entry is None:
+            return False
+        self._entries[key] = _Entry(value, entry.expires_at, entry.stored_at)
+        self._entries.move_to_end(key)
+        return True
+
     def cooldown_remaining(self, key: str) -> float:
         """Return remaining cooldown seconds for a key."""
         remaining = self._cooldown_seconds - (time.monotonic() - self._last_request.get(key, 0.0))

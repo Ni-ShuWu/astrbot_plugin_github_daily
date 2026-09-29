@@ -33,8 +33,8 @@ class GitHubAdapter:
         self._max_retries = max(0, max_retries)
         self.rate_limit = RateLimitTracker()
 
-    async def fetch_user_events(self, username: str) -> list[GitHubActivity]:
-        """Fetch up to the first ``EVENTS_PER_PAGE`` public events for a user."""
+    def _headers(self) -> dict[str, str]:
+        """Build the headers shared by GitHub API requests."""
         headers = {
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
@@ -42,6 +42,11 @@ class GitHubAdapter:
         }
         if self._token:
             headers["Authorization"] = "Bearer " + self._token
+        return headers
+
+    async def fetch_user_events(self, username: str) -> list[GitHubActivity]:
+        """Fetch up to the first ``EVENTS_PER_PAGE`` public events for a user."""
+        headers = self._headers()
         url = f"{self.BASE_URL}/users/{username}/events/public"
         for attempt in range(self._max_retries + 1):
             try:
@@ -68,6 +73,29 @@ class GitHubAdapter:
                     raise GitHubApiError(f"GitHub request failed: {exc}") from exc
                 await asyncio.sleep(2**attempt)
         raise GitHubApiError("GitHub request failed after retries")
+
+    async def fetch_push_commit_count(self, repository: str, before: str, head: str) -> int | None:
+        """Fetch the commit count between a push's before and head commits.
+
+        Return ``None`` when the range cannot be determined, such as a new
+        branch with an all-zero ``before`` SHA or when GitHub is unavailable.
+        """
+        if not repository or not before or not head or set(before) == {"0"}:
+            return None
+        if self.rate_limit.wait_seconds() > 0:
+            return None
+        url = f"{self.BASE_URL}/repos/{repository}/compare/{before}...{head}"
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers()) as client:
+                response = await client.get(url)
+            self.rate_limit.observe(response.headers)
+            if response.status_code != 200:
+                return None
+            payload = response.json()
+            ahead_by = payload.get("ahead_by") if isinstance(payload, dict) else None
+            return ahead_by if isinstance(ahead_by, int) and ahead_by >= 0 else None
+        except (httpx.RequestError, ValueError):
+            return None
 
     @classmethod
     def _parse_event(cls, item: dict[str, Any]) -> GitHubActivity:
@@ -113,12 +141,14 @@ class GitHubAdapter:
             commits = cls._commit_messages(payload)
             size = payload.get("size")
             if not isinstance(size, int) or size < 0:
-                size = len(commits)
+                size = len(commits) if isinstance(payload.get("commits"), list) else None
             detail["ref"] = cls._clean_text(payload.get("ref"), 120) or None
             detail["ref_type"] = "branch"  # PushEvent refs are always branches.
             detail["commits"] = commits
             detail["commit_count"] = size
-            head = cls._clean_text(payload.get("head"), 120)
+            detail["before"] = cls._clean_text(payload.get("before"), 40) or None
+            head = cls._clean_text(payload.get("head"), 40) or None
+            detail["head"] = head
             if head and repository:
                 detail["url"] = f"https://github.com/{repository}/commit/{head}"
         elif event_type in {"CreateEvent", "DeleteEvent"}:
