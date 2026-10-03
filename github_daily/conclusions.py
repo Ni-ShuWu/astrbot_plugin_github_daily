@@ -18,8 +18,9 @@ DEFAULT_CONCLUSIONS: dict[str, str] = {
     "idle": "最近没有检测到公开活动，疑似摸鱼。",
 }
 
-#: Rotating pool per status. Each pool opens with the fixed conclusion and holds
-#: two sentences for each tone: 中性 / 编译器 / 编程语言 / 开源 / 雌小鬼 / 轻嘲讽.
+#: Rotating pool per status. Each pool opens with the fixed conclusion, then
+#: mixes sentences across these tones: 中性 / 编译器 / 编程语言 / 开源 / 雌小鬼 /
+#: 轻嘲讽.
 ROTATING_CONCLUSIONS: dict[str, tuple[str, ...]] = {
     "coding": (
         DEFAULT_CONCLUSIONS["coding"],
@@ -34,6 +35,18 @@ ROTATING_CONCLUSIONS: dict[str, tuple[str, ...]] = {
         "诶～主动提交了，杂鱼今天转性了？♡",
         "行，这次算你写了。别骄傲，有可能是 rebase 出来的。",
         "本次不算摸鱼，算摸完鱼之后的补救。",
+        "键盘声噼里啪啦，产出居然是真的。",
+        "监控录像（事件流）显示：这次是真的在写。",
+        "代码行数在涨，发际线暂时稳定。",
+        "编译器一路绿灯，难得和谐的一天。",
+        "警告是有的，但都是他自己看得懂的那种。",
+        "语言不重要，重要的是今天真的写了。",
+        "写的什么语言暂且保密，反正能跑。",
+        "仓库又往前滚了一格，世界线轻微变动。",
+        "这颗 commit 已经飞向远端，追不回来了。",
+        "难得勤快一次，已截图存档。",
+        "太阳打西边出来了：今天有提交。",
+        "今日 KPI：一个 commit，超出预期。",
     ),
     "active": (
         DEFAULT_CONCLUSIONS["active"],
@@ -48,6 +61,18 @@ ROTATING_CONCLUSIONS: dict[str, tuple[str, ...]] = {
         "在忙呢～忙成什么样就不知道了，反正不是代码♡",
         "活动是有的，代码是不一定的，摸鱼大概率是确定的。",
         "看出来在忙了，就是不知道在忙什么。",
+        "有痕迹，但痕迹的性质还在调查中。",
+        "人是活的，代码状态待确认。",
+        "至少在 GitHub 上露了个脸。",
+        "动了，但没完全动。",
+        "像 TypeScript 的 any：说是什么都行。",
+        "编译器表示：没收到活，不予置评。",
+        "star 点得飞起，代码纹丝不动。",
+        "给别人的仓库很热心，自己的仓库很冷静。",
+        "这波叫行为艺术，不叫开发。",
+        "看起来很忙，这是职场第一生存技能。",
+        "活动类型：围观。围观也是一种参与。",
+        "点点点了一圈，diff 依旧为零。",
     ),
     "idle": (
         DEFAULT_CONCLUSIONS["idle"],
@@ -62,6 +87,18 @@ ROTATING_CONCLUSIONS: dict[str, tuple[str, ...]] = {
         "全程无提交，杂鱼今天也在装睡呢～♡",
         "本地无改动，远端无提交，人间蒸发。",
         "建议用 git commit --amend --no-edit 改一下人生。",
+        "一片安静，安静得能听见风扇声。",
+        "今日活跃度：与咸鱼持平。",
+        "事件流干净得像刚重装完系统。",
+        "暂无动静，可能在认真思考人生。",
+        "编译器今天放假，因为没东西可编。",
+        "连语法错误都懒得犯了。",
+        "开源界风平浪静，他这边纹丝不动。",
+        "贡献图上又多了一个灰格子。",
+        "摸鱼也是体力活，辛苦了。",
+        "建议把枕头加入开发依赖。",
+        "键盘上的灰比代码厚了。",
+        "git log 的最后一行，还停留在很久以前。",
     ),
 }
 
